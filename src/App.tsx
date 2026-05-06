@@ -32,16 +32,20 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
   
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [fetchingModels, setFetchingModels] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<Record<string, string[]>>({});
   
+  const [formAvailableModels, setFormAvailableModels] = useState<string[]>([]);
+  const [formFetchingModels, setFormFetchingModels] = useState(false);
+
   const [newKey, setNewKey] = useState({ 
     name: '', 
     key: '', 
     endpoint: '',
     qpsLimit: 0,
-    modelFilters: ''
+    modelFilters: [] as string[]
   });
   const [proxyUrl, setProxyUrl] = useState('');
 
@@ -139,27 +143,82 @@ export default function App() {
     }
   };
 
-  const addKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newKey.key) return;
+  const openAddForm = () => {
+    setEditingKeyId(null);
+    setNewKey({ name: '', key: '', endpoint: '', qpsLimit: 0, modelFilters: [] });
+    setFormAvailableModels([]);
+    setShowAddForm(true);
+  };
+
+  const openEditForm = (key: NimKey) => {
+    setEditingKeyId(key.id);
+    setNewKey({
+      name: key.name,
+      key: key.key,
+      endpoint: key.endpoint || '',
+      qpsLimit: key.qpsLimit || 0,
+      modelFilters: key.modelFilters || []
+    });
+    setFormAvailableModels(key.modelFilters || []); // At least show selected
+    setShowAddForm(true);
+  };
+
+  const fetchFormModels = async () => {
+    if (!newKey.key) {
+      alert("请先输入 API 密钥 (API Key)");
+      return;
+    }
+    setFormFetchingModels(true);
     try {
-      const formattedKey = {
-        ...newKey,
-        modelFilters: newKey.modelFilters ? newKey.modelFilters.split(',').map(s => s.trim()) : []
-      };
-      await fetch('/api/keys', {
+      const response = await fetch('/api/fetch-models', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
           'x-admin-password': localStorage.getItem('nim_admin_password') || ''
         },
-        body: JSON.stringify(formattedKey),
+        body: JSON.stringify({ key: newKey.key, endpoint: newKey.endpoint })
       });
-      setNewKey({ name: '', key: '', endpoint: 'https://integrate.api.nvidia.com/v1', qpsLimit: 0, modelFilters: '' });
+      const data = await response.json();
+      if (data.data) {
+        setFormAvailableModels(data.data.map((m: any) => m.id));
+      } else {
+        alert(data.error || '获取模型失败');
+      }
+    } catch (error) {
+      console.error('Error fetching form models:', error);
+      alert('获取模型失败');
+    } finally {
+      setFormFetchingModels(false);
+    }
+  };
+
+  const saveKeyForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newKey.key) return;
+    try {
+      if (editingKeyId) {
+        await fetch(`/api/keys/${editingKeyId}`, {
+          method: 'PATCH',
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-admin-password': localStorage.getItem('nim_admin_password') || ''
+          },
+          body: JSON.stringify(newKey),
+        });
+      } else {
+        await fetch('/api/keys', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-admin-password': localStorage.getItem('nim_admin_password') || ''
+          },
+          body: JSON.stringify(newKey),
+        });
+      }
       setShowAddForm(false);
       fetchConfig();
     } catch (error) {
-      console.error('Error adding key:', error);
+      console.error('Error saving key:', error);
     }
   };
 
@@ -281,7 +340,7 @@ export default function App() {
                 <Settings size={18} />
               </button>
               <button 
-                onClick={() => setShowAddForm(!showAddForm)}
+                onClick={openAddForm}
                 className="p-3 bg-[#141414] text-[#E4E3E0] hover:scale-105 transition-transform flex items-center gap-2 font-mono text-sm"
               >
                 <Plus size={18} />
@@ -462,9 +521,11 @@ export default function App() {
                     >
                       <Key size={18} />
                     </button>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <h3 className="font-serif italic text-lg leading-tight truncate">{key.name}</h3>
+                        <button onClick={() => openEditForm(key)} className="font-serif italic text-lg leading-tight hover:underline text-left truncate">
+                          {key.name}
+                        </button>
                         {key.modelFilters && key.modelFilters.length > 0 && (
                           <span className="px-1 bg-[#141414] text-[#E4E3E0] text-[8px] font-mono rounded">SMART_ROUTING</span>
                         )}
@@ -587,10 +648,10 @@ export default function App() {
               className="bg-white border border-[#141414] w-full max-w-lg shadow-[8px_8px_0px_0px_#141414] overflow-hidden"
             >
               <div className="bg-[#141414] text-[#E4E3E0] p-4 flex justify-between items-center font-mono text-xs uppercase tracking-widest">
-                <span>新端点配置</span>
+                <span>{editingKeyId ? "修改端点配置" : "新端点配置"}</span>
                 <button onClick={() => setShowAddForm(false)}>关闭</button>
               </div>
-              <form onSubmit={addKey} className="p-8 space-y-6">
+              <form onSubmit={saveKeyForm} className="p-8 space-y-6 max-h-[80vh] overflow-y-auto">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1 col-span-2">
                     <label className="font-mono text-[10px] uppercase opacity-50">友好名称</label>
@@ -624,24 +685,75 @@ export default function App() {
                       onChange={e => setNewKey({...newKey, endpoint: e.target.value})}
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label className="font-mono text-[10px] uppercase opacity-50">Key QPS 限制</label>
+                  <div className="space-y-1 col-span-2">
+                    <label className="font-mono text-[10px] uppercase opacity-50 block mb-2">模型路由规则</label>
+                    <div className="border border-[#141414] p-4 bg-[#F5F5F5] space-y-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs">选择允许通过此端点的模型 (未选则全部允许):</span>
+                        <button 
+                          type="button"
+                          onClick={fetchFormModels}
+                          disabled={formFetchingModels}
+                          className="flex items-center gap-1 font-mono text-[10px] uppercase border p-1 opacity-70 hover:opacity-100 disabled:opacity-30 border-[#141414]"
+                        >
+                          <RefreshCw size={12} className={formFetchingModels ? "animate-spin" : ""} />
+                          拉取可用模型
+                        </button>
+                      </div>
+                      
+                      {formAvailableModels.length > 0 && (
+                        <div className="flex items-center gap-4 text-xs font-mono">
+                          <button 
+                            type="button" 
+                            onClick={() => setNewKey({...newKey, modelFilters: [...formAvailableModels]})}
+                            className="underline hover:no-underline"
+                          >
+                            全选
+                          </button>
+                          <button 
+                            type="button" 
+                            onClick={() => setNewKey({...newKey, modelFilters: []})}
+                            className="underline hover:no-underline"
+                          >
+                            清空
+                          </button>
+                        </div>
+                      )}
+
+                      {formAvailableModels.length > 0 ? (
+                        <div className="grid grid-cols-2 gap-2 text-[10px] font-mono max-h-40 overflow-y-auto">
+                          {formAvailableModels.map(model => (
+                            <label key={model} className="flex items-center gap-2 border border-[#141414]/20 p-1.5 cursor-pointer hover:bg-white transition-colors bg-white/50">
+                              <input 
+                                type="checkbox"
+                                checked={newKey.modelFilters.includes(model)}
+                                onChange={e => {
+                                  if (e.target.checked) {
+                                    setNewKey({...newKey, modelFilters: [...newKey.modelFilters, model]});
+                                  } else {
+                                    setNewKey({...newKey, modelFilters: newKey.modelFilters.filter(m => m !== model)});
+                                  }
+                                }}
+                              />
+                              <span className="truncate">{model}</span>
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-[10px] font-mono opacity-50 italic py-2">
+                          点击右上角按钮拉取可用的模型...
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-1 col-span-2">
+                    <label className="font-mono text-[10px] uppercase opacity-50">该端点 QPS 限制 (0 为不限)</label>
                     <input 
                       type="number" 
                       placeholder="0"
                       className="w-full border border-[#141414] p-3 font-mono focus:outline-none focus:bg-[#F5F5F5]"
                       value={newKey.qpsLimit}
                       onChange={e => setNewKey({...newKey, qpsLimit: parseInt(e.target.value)})}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="font-mono text-[10px] uppercase opacity-50">模型路由 (逗号隔开)</label>
-                    <input 
-                      type="text" 
-                      placeholder="llama-3, mistral..."
-                      className="w-full border border-[#141414] p-3 font-mono focus:outline-none focus:bg-[#F5F5F5]"
-                      value={newKey.modelFilters}
-                      onChange={e => setNewKey({...newKey, modelFilters: e.target.value})}
                     />
                   </div>
                 </div>

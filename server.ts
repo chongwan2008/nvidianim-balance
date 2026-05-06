@@ -5,7 +5,7 @@ import cors from "cors";
 import fs from "fs";
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const CONFIG_FILE = path.join(process.cwd(), "nim-config.json");
 
 // Initial structure for config
@@ -103,6 +103,23 @@ app.post("/api/login", (req, res) => {
 });
 app.get("/api/config", (req, res) => {
   res.json(config);
+});
+
+app.post("/api/fetch-models", async (req, res) => {
+  const { key, endpoint } = req.body;
+  if (!key) return res.status(400).json({ error: "Key not provided" });
+  const targetEndpoint = (endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
+  try {
+    const response = await fetch(`${targetEndpoint}/models`, {
+      headers: { "Authorization": `Bearer ${key}` },
+    });
+    if (!response.ok) throw new Error("API responded with error");
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error("Fetch models error:", error);
+    res.status(500).json({ error: "无法从该 NIM 端点获取模型列表" });
+  }
 });
 
 app.get("/api/models/:keyId", async (req, res) => {
