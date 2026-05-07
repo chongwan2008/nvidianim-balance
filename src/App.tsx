@@ -16,7 +16,8 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
-  Key
+  Key,
+  History
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { NimKey, NimConfig } from './types';
@@ -36,6 +37,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [fetchingModels, setFetchingModels] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<Record<string, string[]>>({});
+  const [showLogs, setShowLogs] = useState<Record<string, boolean>>({});
   
   const [formAvailableModels, setFormAvailableModels] = useState<string[]>([]);
   const [formFetchingModels, setFormFetchingModels] = useState(false);
@@ -582,6 +584,14 @@ export default function App() {
                     </div>
 
                     <button 
+                      onClick={() => setShowLogs(prev => ({ ...prev, [key.id]: !prev[key.id] }))}
+                      className={`p-2 transition-colors ${showLogs[key.id] ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-black/5'}`}
+                      title="查看最后 3 次调用日志"
+                    >
+                      <History size={18} />
+                    </button>
+
+                    <button 
                       onClick={() => deleteKey(key.id)}
                       className="p-2 text-red-600 hover:bg-red-50 transition-colors"
                     >
@@ -590,6 +600,35 @@ export default function App() {
                   </div>
                 </motion.div>
                 
+                {showLogs[key.id] && (
+                  <motion.div 
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    className="mx-4 mb-2 mt-[-8px] bg-[#141414] text-[#E4E3E0] p-4 text-[10px] font-mono shadow-[2px_2px_0px_0px_#141414]"
+                  >
+                    <div className="flex items-center justify-between mb-2 pb-1 border-b border-white/10 uppercase tracking-widest text-[8px]">
+                      <span>近期调用日志 (RECENT_LOGS)</span>
+                      <span>MAX_3</span>
+                    </div>
+                    {key.lastLogs && key.lastLogs.length > 0 ? (
+                      <div className="space-y-2">
+                        {key.lastLogs.map((log, idx) => (
+                          <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/5 pb-1 last:border-0">
+                            <div className="flex items-center gap-2">
+                              <span className={log.status >= 400 ? 'text-red-400' : 'text-green-400'}>[{log.status}]</span>
+                              <span className="opacity-70">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                              <span className="bg-white/10 px-1 rounded truncate max-w-[150px]">{log.model}</span>
+                            </div>
+                            <span className="opacity-50 truncate sm:text-right">PATH: {log.path}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="opacity-40 italic py-2">无历史调用记录</div>
+                    )}
+                  </motion.div>
+                )}
+
                 {availableModels[key.id] && (
                   <motion.div 
                     initial={{ height: 0, opacity: 0 }}

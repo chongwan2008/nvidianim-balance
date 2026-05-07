@@ -21,6 +21,12 @@ interface NimKey {
   consecutiveFailures: number;
   tokensConsumed: number;
   lastUsed?: string;
+  lastLogs?: {
+    timestamp: string;
+    model: string;
+    status: number;
+    path: string;
+  }[];
   qpsLimit?: number;
   modelFilters?: string[];
 }
@@ -288,7 +294,19 @@ app.all("/nim-proxy/*", async (req, res) => {
       body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(req.body) : undefined,
     });
 
+    const addLog = (status: number) => {
+      if (!selectedKey.lastLogs) selectedKey.lastLogs = [];
+      selectedKey.lastLogs.unshift({
+        timestamp: new Date().toISOString(),
+        model: model || "unknown",
+        status: status,
+        path: subPath
+      });
+      if (selectedKey.lastLogs.length > 3) selectedKey.lastLogs.pop();
+    };
+
     if (!response.ok) {
+       addLog(response.status);
        selectedKey.errorCount = (selectedKey.errorCount || 0) + 1;
        selectedKey.consecutiveFailures = (selectedKey.consecutiveFailures || 0) + 1;
        
@@ -303,6 +321,7 @@ app.all("/nim-proxy/*", async (req, res) => {
        return res.status(response.status).json(errorData);
     }
 
+    addLog(response.status);
     selectedKey.status = "active";
     selectedKey.consecutiveFailures = 0;
     
@@ -332,6 +351,15 @@ app.all("/nim-proxy/*", async (req, res) => {
     saveConfig();
   } catch (error) {
     console.error("Proxy error:", error);
+    if (!selectedKey.lastLogs) selectedKey.lastLogs = [];
+    selectedKey.lastLogs.unshift({
+      timestamp: new Date().toISOString(),
+      model: model || "unknown",
+      status: 500,
+      path: subPath
+    });
+    if (selectedKey.lastLogs.length > 3) selectedKey.lastLogs.pop();
+
     selectedKey.errorCount = (selectedKey.errorCount || 0) + 1;
     selectedKey.consecutiveFailures = (selectedKey.consecutiveFailures || 0) + 1;
     if (selectedKey.consecutiveFailures >= config.settings.circuitBreakerThreshold) {
@@ -364,7 +392,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }

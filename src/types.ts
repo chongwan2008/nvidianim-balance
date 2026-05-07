@@ -12,6 +12,12 @@ export interface NimKey {
   consecutiveFailures: number;
   tokensConsumed: number;
   lastUsed?: string;
+  lastLogs?: {
+    timestamp: string;
+    model: string;
+    status: number;
+    path: string;
+  }[];
   
   // Per-key Config
   qpsLimit?: number; // 0 or undefined means unlimited
