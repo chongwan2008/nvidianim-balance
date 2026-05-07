@@ -85,8 +85,8 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Simple Auth Middleware
 const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  // Public routes
-  if (req.path === '/api/login' || req.path.startsWith('/nim-proxy/')) {
+  // Public routes. Note: When mounted on /api, req.path is relative to /api
+  if (req.path === '/login' || req.path === '/api/login' || req.path.startsWith('/nim-proxy/')) {
     return next();
   }
 
