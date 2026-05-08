@@ -38,6 +38,7 @@ export default function App() {
   const [fetchingModels, setFetchingModels] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<Record<string, string[]>>({});
   const [showLogs, setShowLogs] = useState<Record<string, boolean>>({});
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
   
   const [formAvailableModels, setFormAvailableModels] = useState<string[]>([]);
   const [formFetchingModels, setFormFetchingModels] = useState(false);
@@ -269,6 +270,24 @@ export default function App() {
     }
   };
 
+  const runAllHealthChecks = async () => {
+    setIsCheckingHealth(true);
+    try {
+      await fetch('/api/health-check/run', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-admin-password': localStorage.getItem('nim_admin_password') || ''
+        }
+      });
+      fetchConfig();
+    } catch (error) {
+      console.error('Error running health checks:', error);
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  };
+
   const copyProxyUrl = () => {
     navigator.clipboard.writeText(proxyUrl);
     alert('代理 URL 已复制到剪贴板！');
@@ -353,12 +372,12 @@ export default function App() {
 
       <main className="p-6 max-w-7xl mx-auto space-y-8">
         {/* Global Stats Bar */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           {[
             { label: '活跃节点', value: `${config.keys.filter(k => k.enabled && k.status === 'active').length} / ${config.keys.length}`, icon: Database },
             { label: '总请求数', value: config.keys.reduce((acc, k) => acc + k.useCount, 0).toLocaleString(), icon: Activity },
-            { label: '负载均衡算法', value: config.settings.strategy.replace('-', '_').toUpperCase(), icon: RefreshCw },
-            { label: '失败率', value: `${((config.keys.reduce((acc, k) => acc + (k.errorCount || 0), 0) / (config.keys.reduce((acc, k) => acc + k.useCount, 0) || 1)) * 100).toFixed(1)}%`, icon: AlertCircle },
+            { label: '负载策略', value: config.settings.strategy.replace('-', '_').toUpperCase(), icon: RefreshCw },
+            { label: '平均成功率', value: `${((config.keys.reduce((acc, k) => acc + (k.useCount - (k.errorCount || 0)), 0) / (config.keys.reduce((acc, k) => acc + k.useCount, 0) || 1)) * 100).toFixed(1)}%`, icon: CheckCircle2 },
           ].map((stat, i) => (
             <div key={i} className="bg-white border border-[#141414] p-4 flex items-center justify-between shadow-[2px_2px_0px_0px_#141414]">
               <div>
@@ -368,6 +387,14 @@ export default function App() {
               <stat.icon size={20} className="opacity-20" />
             </div>
           ))}
+          <button 
+            onClick={runAllHealthChecks}
+            disabled={isCheckingHealth}
+            className="group bg-white border border-[#141414] p-4 flex flex-col items-center justify-center shadow-[2px_2px_0px_0px_#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors disabled:opacity-50"
+          >
+            <ShieldCheck size={20} className={isCheckingHealth ? "animate-pulse mb-1" : "mb-1 group-hover:scale-110 transition-transform"} />
+            <span className="font-mono text-[10px] uppercase tracking-widest">{isCheckingHealth ? '检查中...' : '健康检查'}</span>
+          </button>
         </div>
 
         {/* Settings Panel */}
@@ -411,6 +438,15 @@ export default function App() {
                     type="number"
                     value={config.settings.circuitBreakerThreshold}
                     onChange={(e) => updateSettings({ circuitBreakerThreshold: parseInt(e.target.value) })}
+                    className="w-full border border-[#141414] p-2 font-mono text-sm focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="font-mono text-[10px] uppercase opacity-50 block">自动健康检查间隔 (分钟, 0 为关闭)</label>
+                  <input 
+                    type="number"
+                    value={config.settings.healthCheckInterval || 0}
+                    onChange={(e) => updateSettings({ healthCheckInterval: parseInt(e.target.value) })}
                     className="w-full border border-[#141414] p-2 font-mono text-sm focus:outline-none"
                   />
                 </div>

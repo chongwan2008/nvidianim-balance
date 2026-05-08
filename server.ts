@@ -40,6 +40,7 @@ interface NimConfig {
     globalQpsLimit: number;
     circuitBreakerThreshold: number;
     defaultEndpoint: string;
+    healthCheckInterval: number;
     masterKey?: string;
     adminPassword?: string;
   };
@@ -52,6 +53,7 @@ let config: NimConfig = {
     globalQpsLimit: 0,
     circuitBreakerThreshold: 5,
     defaultEndpoint: "https://integrate.api.nvidia.com/v1",
+    healthCheckInterval: 5, // Default to 5 minutes
     masterKey: "",
     adminPassword: "admin" // Default password
   }
@@ -184,10 +186,58 @@ app.patch("/api/keys/:id", (req, res) => {
 });
 
 app.patch("/api/settings", (req, res) => {
+  const oldInterval = config.settings.healthCheckInterval;
   config.settings = { ...config.settings, ...req.body };
+  
+  if (config.settings.healthCheckInterval !== oldInterval) {
+    resetHealthCheckInterval();
+  }
+
   saveConfig();
   res.json(config.settings);
 });
+
+// Health Check Logic
+async function runHealthCheck() {
+  console.log("Running health check for all enabled keys...");
+  const checks = config.keys.filter(k => k.enabled).map(async (key) => {
+    const endpoint = (key.endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
+    try {
+      const response = await fetch(`${endpoint}/models`, {
+        headers: { "Authorization": `Bearer ${key.key}` },
+        signal: AbortSignal.timeout(5000) // 5 second timeout
+      });
+      
+      if (response.ok) {
+        key.status = "active";
+        key.consecutiveFailures = 0;
+      } else {
+        // If it was already working, don't necessarily break it on one health check skip,
+        // but if it was broken, keep it broken. 
+        // Actually, if it fails health check, we should probably mark it as error
+        key.status = "error";
+      }
+    } catch (error) {
+      key.status = "error";
+    }
+  });
+
+  await Promise.all(checks);
+  saveConfig();
+}
+
+app.post("/api/health-check/run", async (req, res) => {
+  await runHealthCheck();
+  res.json({ success: true, keys: config.keys.map(k => ({ id: k.id, status: k.status })) });
+});
+
+let healthCheckTimer: NodeJS.Timeout | null = null;
+function resetHealthCheckInterval() {
+  if (healthCheckTimer) clearInterval(healthCheckTimer);
+  if (config.settings.healthCheckInterval > 0) {
+    healthCheckTimer = setInterval(runHealthCheck, config.settings.healthCheckInterval * 60 * 1000);
+  }
+}
 
 // QPS Tracking
 const globalRequests: number[] = [];
@@ -395,6 +445,7 @@ async function startServer() {
 
   app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    resetHealthCheckInterval();
   });
 }
 

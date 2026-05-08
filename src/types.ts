@@ -33,6 +33,7 @@ export interface NimConfig {
     globalQpsLimit: number;
     circuitBreakerThreshold: number; // consecutive failures before breaking
     defaultEndpoint: string;
+    healthCheckInterval: number; // in minutes, 0 means disabled
     masterKey?: string;
     adminPassword?: string;
   };
