@@ -21,6 +21,7 @@ interface NimKey {
   consecutiveFailures: number;
   tokensConsumed: number;
   lastUsed?: string;
+  latency?: number;
   lastLogs?: {
     timestamp: string;
     model: string;
@@ -199,26 +200,40 @@ app.patch("/api/settings", (req, res) => {
 
 // Health Check Logic
 async function runHealthCheck() {
-  console.log("Running health check for all enabled keys...");
+  console.log("Running proactive health check...");
   const checks = config.keys.filter(k => k.enabled).map(async (key) => {
     const endpoint = (key.endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
+    const startTime = Date.now();
     try {
       const response = await fetch(`${endpoint}/models`, {
         headers: { "Authorization": `Bearer ${key.key}` },
-        signal: AbortSignal.timeout(5000) // 5 second timeout
+        signal: AbortSignal.timeout(5000)
       });
       
+      const latency = Date.now() - startTime;
+      key.latency = latency;
+
       if (response.ok) {
+        // Recovery logic: If it was error, restore it
+        if (key.status === "error") {
+          console.log(`Key ${key.id} recovered via health check.`);
+        }
         key.status = "active";
         key.consecutiveFailures = 0;
       } else {
-        // If it was already working, don't necessarily break it on one health check skip,
-        // but if it was broken, keep it broken. 
-        // Actually, if it fails health check, we should probably mark it as error
-        key.status = "error";
+        // Targeted failure increment
+        key.consecutiveFailures = (key.consecutiveFailures || 0) + 1;
+        if (key.consecutiveFailures >= config.settings.circuitBreakerThreshold) {
+          key.status = "error";
+        }
+        key.latency = -1; // -1 indicates failure
       }
     } catch (error) {
-      key.status = "error";
+      key.consecutiveFailures = (key.consecutiveFailures || 0) + 1;
+      if (key.consecutiveFailures >= config.settings.circuitBreakerThreshold) {
+        key.status = "error";
+      }
+      key.latency = -1;
     }
   });
 

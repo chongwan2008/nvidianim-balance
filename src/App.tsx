@@ -596,6 +596,11 @@ export default function App() {
                         <span className="hidden sm:inline text-xs uppercase">
                           {key.status === 'active' ? '活跃' : key.status === 'error' ? '错误' : key.status === 'circuit-broken' ? '熔断' : '限流'}
                         </span>
+                        {key.latency !== undefined && (
+                          <span className={`text-[8px] font-mono ${key.latency === -1 ? 'text-red-500' : 'text-green-600 opacity-60'}`}>
+                            {key.latency === -1 ? 'OFFLINE' : `${key.latency}ms`}
+                          </span>
+                        )}
                         {key.status === 'circuit-broken' && (
                           <button 
                             onClick={() => resetKeyStatus(key.id)}

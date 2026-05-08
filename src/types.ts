@@ -12,6 +12,7 @@ export interface NimKey {
   consecutiveFailures: number;
   tokensConsumed: number;
   lastUsed?: string;
+  latency?: number; // In ms
   lastLogs?: {
     timestamp: string;
     model: string;
