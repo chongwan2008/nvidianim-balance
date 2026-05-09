@@ -294,7 +294,8 @@ export default function App() {
         setValidationResult({ status: 'success', message: `验证通过! 发现 ${data.models.length} 个可用模型。` });
         setFormAvailableModels(data.models);
       } else {
-        setValidationResult({ status: 'error', message: `验证失败 (状态码: ${data.status || 'Unknown'})` });
+        const desc = data.status ? getErrorDescription(data.status) : (data.error || 'Unknown error');
+        setValidationResult({ status: 'error', message: `验证失败: ${desc}` });
       }
     } catch (e) {
       setValidationResult({ status: 'error', message: '无法连接到服务端验证接口' });

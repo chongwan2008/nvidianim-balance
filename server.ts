@@ -90,7 +90,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 // Simple Auth Middleware
 const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   // Public routes. Note: When mounted on /api, req.path is relative to /api
-  if (req.path === '/login' || req.path === '/api/login' || req.path.startsWith('/nim-proxy/')) {
+  if (req.path === '/login' || req.path === '/api/login' || req.path.startsWith('/nim-proxy/') || req.path === '/keys/validate') {
     return next();
   }
 
@@ -444,6 +444,34 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", activeKeys: config.keys.filter(k => k.enabled).length });
 });
 
+app.post("/api/keys/validate", async (req, res) => {
+  const { key, endpoint } = req.body;
+  
+  if (!key) return res.status(400).json({ error: "Missing API key" });
+  
+  const targetEndpoint = (endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
+  
+  console.log(`Validating key against ${targetEndpoint}/models`);
+  
+  try {
+    const response = await fetch(`${targetEndpoint}/models`, {
+      headers: { "Authorization": `Bearer ${key}` },
+      signal: AbortSignal.timeout(10000)
+    });
+    
+    if (response.ok) {
+      const body = await response.json();
+      res.json({ valid: true, models: body.data ? body.data.map((m: any) => m.id) : [] });
+    } else {
+      console.log(`Validation failed with status ${response.status}`);
+      res.status(response.status).json({ valid: false, status: response.status });
+    }
+  } catch (error) {
+    console.error("Validation error:", error);
+    res.status(500).json({ valid: false, error: error instanceof Error ? error.message : "Connection failed" });
+  }
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -459,31 +487,7 @@ async function startServer() {
     });
   }
 
-  app.post("/api/keys/validate", async (req, res) => {
-  const { key, endpoint } = req.body;
-  
-  if (!key) return res.status(400).json({ error: "Missing API key" });
-  
-  const targetEndpoint = (endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
-  
-  try {
-    const response = await fetch(`${targetEndpoint}/models`, {
-      headers: { "Authorization": `Bearer ${key}` },
-      signal: AbortSignal.timeout(10000)
-    });
-    
-    if (response.ok) {
-      const body = await response.json();
-      res.json({ valid: true, models: body.data ? body.data.map((m: any) => m.id) : [] });
-    } else {
-      res.status(response.status).json({ valid: false, status: response.status });
-    }
-  } catch (error) {
-    res.status(500).json({ valid: false, error: "Connection failed" });
-  }
-});
-
-app.listen(Number(PORT), "0.0.0.0", () => {
+  app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     resetHealthCheckInterval();
   });
