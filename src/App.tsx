@@ -41,6 +41,7 @@ export default function App() {
   const [isCheckingHealth, setIsCheckingHealth] = useState(false);
   
   const [formAvailableModels, setFormAvailableModels] = useState<string[]>([]);
+  const [formModelDetails, setFormModelDetails] = useState<Record<string, { contextLength?: number }>>({});
   const [formFetchingModels, setFormFetchingModels] = useState(false);
 
   const [newKey, setNewKey] = useState({ 
@@ -183,7 +184,13 @@ export default function App() {
       });
       const data = await response.json();
       if (data.data) {
-        setFormAvailableModels(data.data.map((m: any) => m.id));
+        const models = data.data.map((m: any) => m.id);
+        const details: Record<string, { contextLength?: number }> = {};
+        data.data.forEach((m: any) => {
+          details[m.id] = { contextLength: m.contextLength };
+        });
+        setFormAvailableModels(models);
+        setFormModelDetails(details);
       } else {
         alert(data.error || '获取模型失败');
       }
@@ -281,7 +288,7 @@ export default function App() {
     setIsValidating(true);
     setValidationResult(null);
     try {
-      const response = await fetch('/api/keys/validate', {
+      const response = await fetch('/api/keys/check-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -293,6 +300,14 @@ export default function App() {
       if (data.valid) {
         setValidationResult({ status: 'success', message: data.message || `验证通过! 发现 ${data.models.length} 个可用模型。` });
         setFormAvailableModels(data.models);
+        
+        if (data.modelDetails) {
+            const details: Record<string, { contextLength?: number }> = {};
+            data.modelDetails.forEach((m: any) => {
+                details[m.id] = { contextLength: m.contextLength };
+            });
+            setFormModelDetails(details);
+        }
       } else {
         const desc = data.error || (data.status ? getErrorDescription(data.status) : '未知错误');
         setValidationResult({ status: 'error', message: `验证失败: ${desc}` });
@@ -386,7 +401,7 @@ export default function App() {
                 <Activity className="text-[#E4E3E0] w-6 h-6" />
               </div>
               <div>
-                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器</h1>
+                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.2</span></h1>
                 <p className="font-mono text-[10px] uppercase opacity-50 tracking-widest leading-none">高可用代理接口</p>
               </div>
             </div>
@@ -741,11 +756,17 @@ export default function App() {
                       </button>
                     </div>
                     <div className="flex flex-wrap gap-1">
-                      {availableModels[key.id].map(model => (
-                        <span key={model} className="px-1.5 py-0.5 bg-[#F5F5F5] border border-[#141414]/10 rounded select-all">
-                          {model}
-                        </span>
-                      ))}
+                      {availableModels[key.id].map(modelId => {
+                        const detail = key.modelDetails?.[modelId];
+                        const ctxLen = detail?.contextLength;
+                        const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : null;
+                        return (
+                          <span key={modelId} className="px-1.5 py-0.5 bg-[#F5F5F5] border border-[#141414]/10 rounded select-all flex items-center gap-1">
+                            {modelId}
+                            {ctx && <span className="opacity-40 text-[8px] bg-black/5 px-1 rounded">{ctx}</span>}
+                          </span>
+                        );
+                      })}
                     </div>
                   </motion.div>
                 )}
@@ -890,7 +911,12 @@ export default function App() {
                                   }
                                 }}
                               />
-                              <span className="truncate">{model}</span>
+                              <span className="truncate flex-1">{model}</span>
+                              {formModelDetails[model]?.contextLength && (
+                                <span className="opacity-40 text-[7px] bg-black/5 px-1 rounded shrink-0">
+                                  {(formModelDetails[model].contextLength! >= 1024 * 1024 ? `${(formModelDetails[model].contextLength! / (1024 * 1024)).toFixed(0)}M` : formModelDetails[model].contextLength! >= 1024 ? `${(formModelDetails[model].contextLength! / 1024).toFixed(0)}K` : formModelDetails[model].contextLength!.toString())}
+                                </span>
+                              )}
                             </label>
                           ))}
                         </div>
@@ -932,7 +958,7 @@ export default function App() {
             <span className="font-mono text-[10px] uppercase tracking-widest leading-none">系统状态：运行中</span>
           </div>
           <p className="font-serif italic text-sm opacity-60">
-            NVIDIA NIM 负载均衡器 v1.0。专为关键任务部署设计。
+            NVIDIA NIM 负载均衡器 v1.2。专为关键任务部署设计。
           </p>
         </div>
         <div className="flex items-center gap-8 font-mono text-[10px] uppercase opacity-40">

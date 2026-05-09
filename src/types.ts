@@ -14,6 +14,7 @@ export interface NimKey {
   lastUsed?: string;
   lastHealthCheck?: string;
   confirmedModels?: string[];
+  modelDetails?: Record<string, { id: string; contextLength?: number; ownedBy?: string }>;
   lastLogs?: {
     timestamp: string;
     model: string;

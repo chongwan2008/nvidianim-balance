@@ -9,6 +9,12 @@ const PORT = process.env.PORT || 3000;
 const CONFIG_FILE = path.join(process.cwd(), "nim-config.json");
 
 // Initial structure for config
+interface ModelDetail {
+  id: string;
+  contextLength?: number;
+  ownedBy?: string;
+}
+
 interface NimKey {
   id: string;
   name: string;
@@ -23,6 +29,7 @@ interface NimKey {
   lastUsed?: string;
   lastHealthCheck?: string;
   confirmedModels?: string[];
+  modelDetails?: Record<string, ModelDetail>;
   lastLogs?: {
     timestamp: string;
     model: string;
@@ -90,7 +97,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 // Simple Auth Middleware
 const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   // Public routes. Note: When mounted on /api, req.path is relative to /api
-  if (req.path === '/login' || req.path === '/api/login' || req.path.startsWith('/nim-proxy/') || req.path === '/keys/validate') {
+  if (req.path === '/login' || req.path === '/api/login' || req.path.startsWith('/nim-proxy/') || req.path === '/keys/check-status') {
     return next();
   }
 
@@ -126,12 +133,49 @@ app.post("/api/fetch-models", async (req, res) => {
     });
     if (!response.ok) throw new Error("API responded with error");
     const data = await response.json();
+    
+    // Enrich with context length
+    if (data.data) {
+      data.data = data.data.map((m: any) => ({
+        ...m,
+        contextLength: detectContextLength(m.id)
+      }));
+    }
+    
     res.json(data);
   } catch (error) {
     console.error("Fetch models error:", error);
     res.status(500).json({ error: "无法从该 NIM 端点获取模型列表" });
   }
 });
+
+const detectContextLength = (modelId: string): number | undefined => {
+  const id = modelId.toLowerCase();
+  
+  // Explicitly mentioned in ID
+  const lengthMatch = id.match(/(\d+)([km])/);
+  if (lengthMatch) {
+    const value = parseInt(lengthMatch[1]);
+    const unit = lengthMatch[2];
+    if (unit === 'k') return value * 1024;
+    if (unit === 'm') return value * 1024 * 1024;
+  }
+
+  // Common NIM / Llama / Mixtral defaults
+  if (id.includes("llama-3.1")) return 131072; // 128k
+  if (id.includes("llama-3.3")) return 131072; // 128k
+  if (id.includes("llama-3")) return 8192;     // 8k
+  if (id.includes("mixtral-8x7b")) return 32768; // 32k
+  if (id.includes("mixtral-8x22b")) return 65536; // 64k
+  if (id.includes("mistral-large")) return 32768;
+  if (id.includes("nemotron")) return 4096;
+  if (id.includes("phi-3")) return 131072;    // Often 128k
+  if (id.includes("gemma-2")) return 8192;
+  if (id.includes("qwen")) return 32768;
+  if (id.includes("yi-")) return 204800; // 200k usually
+  
+  return undefined;
+};
 
 app.get("/api/models/:keyId", async (req, res) => {
   const key = config.keys.find(k => k.id === req.params.keyId);
@@ -144,6 +188,21 @@ app.get("/api/models/:keyId", async (req, res) => {
     });
     if (!response.ok) throw new Error("API responded with error");
     const data = await response.json();
+    
+    // Enrich with context length
+    if (data.data) {
+      if (!key.modelDetails) key.modelDetails = {};
+      data.data.forEach((m: any) => {
+        key.modelDetails![m.id] = {
+          id: m.id,
+          contextLength: detectContextLength(m.id),
+          ownedBy: m.owned_by
+        };
+      });
+      key.confirmedModels = data.data.map((m: any) => m.id);
+      saveConfig();
+    }
+    
     res.json(data);
   } catch (error) {
     console.error("Fetch models error:", error);
@@ -216,6 +275,14 @@ async function runHealthCheck() {
         const body = await response.json();
         if (body.data) {
           key.confirmedModels = body.data.map((m: any) => m.id);
+          if (!key.modelDetails) key.modelDetails = {};
+          body.data.forEach((m: any) => {
+            key.modelDetails![m.id] = {
+              id: m.id,
+              contextLength: detectContextLength(m.id),
+              ownedBy: m.owned_by
+            };
+          });
         }
         
         if (key.status !== "active") {
@@ -444,14 +511,16 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", activeKeys: config.keys.filter(k => k.enabled).length });
 });
 
-app.post("/api/keys/validate", async (req, res) => {
+app.post("/api/keys/check-status", async (req, res) => {
   const { key, endpoint } = req.body;
   
-  if (!key) return res.status(400).json({ error: "Missing API key" });
+  if (!key) {
+    console.warn("Validation request failed: Key is missing");
+    return res.status(400).json({ valid: false, error: "密钥不能为空" });
+  }
   
   const targetEndpoint = (endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
-  
-  console.log(`Validating key against: ${targetEndpoint}/models`);
+  console.log(`[Validation] Testing key (${key.substring(0, 8)}...) against: ${targetEndpoint}/models`);
   
   try {
     const response = await fetch(`${targetEndpoint}/models`, {
@@ -462,47 +531,81 @@ app.post("/api/keys/validate", async (req, res) => {
       signal: AbortSignal.timeout(10000)
     });
     
-    console.log(`NVIDIA Response: ${response.status} ${response.statusText}`);
+    console.log(`[Validation] Upstream Status: ${response.status} ${response.statusText}`);
     
     if (response.ok) {
       const contentType = response.headers.get("content-type");
       if (contentType && contentType.includes("application/json")) {
         const body = await response.json();
-        const models = body.data ? body.data.map((m: any) => m.id) : [];
-        console.log(`Validation SUCCESS: Found ${models.length} models`);
-        res.json({ 
-          valid: true, 
-          models,
-          message: `验证通过! 发现 ${models.length} 个模型。`
-        });
+        
+        // Strict check: must have a 'data' array
+        if (body && Array.isArray(body.data)) {
+          const models = body.data.map((m: any) => m.id);
+          const modelsWithDetails = body.data.map((m: any) => ({
+            id: m.id,
+            contextLength: detectContextLength(m.id),
+            ownedBy: m.owned_by
+          }));
+          console.log(`[Validation] SUCCESS: Found ${models.length} models`);
+          
+          if (models.length === 0) {
+            return res.status(401).json({ 
+              valid: false, 
+              error: "验证失败: 密钥有效但未关联任何模型 (白名单限制?)",
+              status: 401
+            });
+          }
+
+          return res.json({ 
+            valid: true, 
+            models,
+            modelDetails: modelsWithDetails,
+            message: `验证成功! 已发现 ${models.length} 个模型。`
+          });
+        } else {
+          console.warn("[Validation] FAILED: Response body does not contain expected 'data' array");
+          return res.status(422).json({ 
+            valid: false, 
+            error: "验证失败: 接口返回数据格式异常",
+            status: response.status
+          });
+        }
       } else {
-        console.warn("Validation FAILED: Expected JSON response, got something else.");
-        res.status(422).json({ 
+        const textPreview = (await response.text()).substring(0, 100);
+        console.warn(`[Validation] FAILED: Expected JSON, got: ${textPreview}`);
+        return res.status(422).json({ 
           valid: false, 
-          error: "接口返回格式错误 (不是 JSON)",
+          error: "验证失败: 接口返回非 JSON 格式, 请检查端点 URL 类型",
           status: response.status
         });
       }
     } else {
-      let errorDetail = "验证失败";
+      // 401, 403, 404, etc.
+      let errorMsg = "验证失败";
       try {
-        const errorBody = await response.json();
-        errorDetail = errorBody.detail || errorBody.message || errorDetail;
-      } catch (e) {
-        // Not JSON error body
-      }
-      console.log(`Validation FAILED: ${response.status} - ${errorDetail}`);
-      res.status(response.status).json({ 
+        const errBody = await response.json();
+        errorMsg = errBody.detail || errBody.message || errorMsg;
+      } catch (e) {}
+
+      console.log(`[Validation] FAILED with status ${response.status}: ${errorMsg}`);
+      
+      // Specifically handle 401/403 which are most common for bad keys
+      if (response.status === 401) errorMsg = "API Key 无效 (Unauthorized)";
+      if (response.status === 403) errorMsg = "API Key 权限受限 (Forbidden)";
+
+      return res.status(response.status).json({ 
         valid: false, 
         status: response.status,
-        error: errorDetail
+        error: errorMsg
       });
     }
   } catch (error) {
-    console.error("Validation EXCEPTION:", error);
-    res.status(500).json({ 
+    const errorPrefix = error instanceof Error && error.name === 'AbortError' ? '连接超时' : '请求异常';
+    const message = error instanceof Error ? error.message : "未知错误";
+    console.error("[Validation] EXCEPTION:", message);
+    return res.status(500).json({ 
       valid: false, 
-      error: error instanceof Error ? error.message : "无法连接到服务器"
+      error: `${errorPrefix}: ${message}`
     });
   }
 });
