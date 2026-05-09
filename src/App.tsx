@@ -63,7 +63,7 @@ export default function App() {
   useEffect(() => {
     if (authenticated) {
       fetchConfig();
-      const interval = setInterval(fetchConfig, 3000);
+      const interval = setInterval(fetchConfig, 10000); // 10s interval
       return () => clearInterval(interval);
     }
   }, [authenticated]);
@@ -267,6 +267,51 @@ export default function App() {
       fetchConfig();
     } catch (error) {
       console.error('Error resetting key:', error);
+    }
+  };
+
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationResult, setValidationResult] = useState<{ status: 'idle' | 'success' | 'error', message: string } | null>(null);
+
+  const validateKey = async () => {
+    if (!newKey.key) {
+      setValidationResult({ status: 'error', message: '请输入 API 密钥' });
+      return;
+    }
+    setIsValidating(true);
+    setValidationResult(null);
+    try {
+      const response = await fetch('/api/keys/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          key: newKey.key,
+          endpoint: newKey.endpoint
+        })
+      });
+      const data = await response.json();
+      if (data.valid) {
+        setValidationResult({ status: 'success', message: `验证通过! 发现 ${data.models.length} 个可用模型。` });
+        setFormAvailableModels(data.models);
+      } else {
+        setValidationResult({ status: 'error', message: `验证失败 (状态码: ${data.status || 'Unknown'})` });
+      }
+    } catch (e) {
+      setValidationResult({ status: 'error', message: '无法连接到服务端验证接口' });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  const getErrorDescription = (status: number) => {
+    switch (status) {
+      case 401: return 'API Key 错误或已过期';
+      case 403: return '无权访问该模型';
+      case 404: return '模型不存在/路径错误';
+      case 429: return '触发频率限制';
+      case 500: return 'NVIDIA 服务器内部错误';
+      case 503: return '服务器目前不可用';
+      default: return '未知接口错误';
     }
   };
 
@@ -575,15 +620,6 @@ export default function App() {
                   </div>
 
                     <div className="flex items-center justify-between sm:justify-end gap-6 font-mono text-sm shrink-0">
-                    <button 
-                      onClick={() => fetchModelsForKey(key.id)}
-                      disabled={fetchingModels === key.id}
-                      title="获取可用模型列表"
-                      className="p-2 text-[#141414] hover:bg-black/5 rounded transition-colors disabled:opacity-30"
-                    >
-                      <RefreshCw size={18} className={fetchingModels === key.id ? "animate-spin" : ""} />
-                    </button>
-
                     <div className="flex items-center gap-2">
                       {key.status === 'active' ? (
                         <CheckCircle2 size={16} className="text-green-600" />
@@ -596,11 +632,6 @@ export default function App() {
                         <span className="hidden sm:inline text-xs uppercase">
                           {key.status === 'active' ? '活跃' : key.status === 'error' ? '错误' : key.status === 'circuit-broken' ? '熔断' : '限流'}
                         </span>
-                        {key.latency !== undefined && (
-                          <span className={`text-[8px] font-mono ${key.latency === -1 ? 'text-red-500' : 'text-green-600 opacity-60'}`}>
-                            {key.latency === -1 ? 'OFFLINE' : `${key.latency}ms`}
-                          </span>
-                        )}
                         {key.status === 'circuit-broken' && (
                           <button 
                             onClick={() => resetKeyStatus(key.id)}
@@ -623,6 +654,20 @@ export default function App() {
                         {key.lastUsed ? new Date(key.lastUsed).toLocaleTimeString() : '从未'}
                       </span>
                     </div>
+
+                    <button 
+                      onClick={() => {
+                        if (key.confirmedModels) {
+                             setAvailableModels(prev => ({ ...prev, [key.id]: key.confirmedModels! }));
+                        } else {
+                             fetchModelsForKey(key.id);
+                        }
+                      }}
+                      className={`p-2 transition-colors ${availableModels[key.id] ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-black/5'}`}
+                      title={key.confirmedModels ? "查看已确认模型" : "查询模型"}
+                    >
+                      <Database size={18} className={fetchingModels === key.id ? "animate-spin" : ""} />
+                    </button>
 
                     <button 
                       onClick={() => setShowLogs(prev => ({ ...prev, [key.id]: !prev[key.id] }))}
@@ -654,11 +699,16 @@ export default function App() {
                     {key.lastLogs && key.lastLogs.length > 0 ? (
                       <div className="space-y-2">
                         {key.lastLogs.map((log, idx) => (
-                          <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/5 pb-1 last:border-0">
+                          <div key={idx} className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/5 pb-1 last:border-0 ${log.status >= 400 ? 'text-red-400' : ''}`}>
                             <div className="flex items-center gap-2">
-                              <span className={log.status >= 400 ? 'text-red-400' : 'text-green-400'}>[{log.status}]</span>
+                              <span className={log.status >= 400 ? 'text-red-400 font-bold' : 'text-green-400'}>[{log.status}]</span>
                               <span className="opacity-70">{new Date(log.timestamp).toLocaleTimeString()}</span>
                               <span className="bg-white/10 px-1 rounded truncate max-w-[150px]">{log.model}</span>
+                              {log.status >= 400 && (
+                                <span className="font-bold text-[8px] border border-red-400 px-1 rounded">
+                                  {getErrorDescription(log.status)}
+                                </span>
+                              )}
                             </div>
                             <span className="opacity-50 truncate sm:text-right">PATH: {log.path}</span>
                           </div>
@@ -746,14 +796,38 @@ export default function App() {
                   </div>
                   <div className="space-y-1 col-span-2">
                     <label className="font-mono text-[10px] uppercase opacity-50">API 密钥 (API Key)</label>
-                    <input 
-                      type="password" 
-                      required
-                      placeholder="nvapi-..."
-                      className="w-full border border-[#141414] p-3 font-mono focus:outline-none focus:bg-[#F5F5F5]"
-                      value={newKey.key}
-                      onChange={e => setNewKey({...newKey, key: e.target.value})}
-                    />
+                    <div className="flex gap-2">
+                      <input 
+                        type="password" 
+                        required
+                        placeholder="nvapi-..."
+                        className="flex-1 border border-[#141414] p-3 font-mono focus:outline-none focus:bg-[#F5F5F5]"
+                        value={newKey.key}
+                        onChange={e => {
+                          setNewKey({...newKey, key: e.target.value});
+                          setValidationResult(null);
+                        }}
+                      />
+                      <button 
+                        type="button"
+                        onClick={validateKey}
+                        disabled={isValidating}
+                        className={`px-4 border border-[#141414] transition-colors text-xs font-mono disabled:opacity-50 ${
+                          validationResult?.status === 'success' ? 'bg-green-500 text-white border-green-600' : 
+                          validationResult?.status === 'error' ? 'bg-red-500 text-white border-red-600' : 
+                          'hover:bg-black hover:text-white'
+                        }`}
+                      >
+                        {isValidating ? '...' : 
+                         validationResult?.status === 'success' ? '通过' : 
+                         validationResult?.status === 'error' ? '失败' : '测试连接'}
+                      </button>
+                    </div>
+                    {validationResult && (
+                      <p className={`text-[10px] font-mono mt-1 ${validationResult.status === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+                        {validationResult.status === 'success' ? '✓ ' : '✗ '}{validationResult.message}
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-1 col-span-2">
                     <label className="font-mono text-[10px] uppercase opacity-50">NIM 端点 URL (留空使用默认: {config.settings.defaultEndpoint})</label>

@@ -21,7 +21,8 @@ interface NimKey {
   consecutiveFailures: number;
   tokensConsumed: number;
   lastUsed?: string;
-  latency?: number;
+  lastHealthCheck?: string;
+  confirmedModels?: string[];
   lastLogs?: {
     timestamp: string;
     model: string;
@@ -200,40 +201,40 @@ app.patch("/api/settings", (req, res) => {
 
 // Health Check Logic
 async function runHealthCheck() {
-  console.log("Running proactive health check...");
+  console.log("Running proactive health check for all keys...");
   const checks = config.keys.filter(k => k.enabled).map(async (key) => {
     const endpoint = (key.endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
-    const startTime = Date.now();
     try {
       const response = await fetch(`${endpoint}/models`, {
         headers: { "Authorization": `Bearer ${key.key}` },
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(10000) // 10s timeout
       });
       
-      const latency = Date.now() - startTime;
-      key.latency = latency;
+      key.lastHealthCheck = new Date().toISOString();
 
       if (response.ok) {
-        // Recovery logic: If it was error, restore it
-        if (key.status === "error") {
-          console.log(`Key ${key.id} recovered via health check.`);
+        const body = await response.json();
+        if (body.data) {
+          key.confirmedModels = body.data.map((m: any) => m.id);
+        }
+        
+        if (key.status !== "active") {
+          console.log(`Key ${key.id} (${key.name}) is now ACTIVE.`);
         }
         key.status = "active";
         key.consecutiveFailures = 0;
       } else {
-        // Targeted failure increment
         key.consecutiveFailures = (key.consecutiveFailures || 0) + 1;
         if (key.consecutiveFailures >= config.settings.circuitBreakerThreshold) {
+          if (key.status !== "error") console.log(`Key ${key.id} marked as ERROR due to health check failure.`);
           key.status = "error";
         }
-        key.latency = -1; // -1 indicates failure
       }
     } catch (error) {
       key.consecutiveFailures = (key.consecutiveFailures || 0) + 1;
       if (key.consecutiveFailures >= config.settings.circuitBreakerThreshold) {
         key.status = "error";
       }
-      key.latency = -1;
     }
   });
 
@@ -458,7 +459,31 @@ async function startServer() {
     });
   }
 
-  app.listen(Number(PORT), "0.0.0.0", () => {
+  app.post("/api/keys/validate", async (req, res) => {
+  const { key, endpoint } = req.body;
+  
+  if (!key) return res.status(400).json({ error: "Missing API key" });
+  
+  const targetEndpoint = (endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
+  
+  try {
+    const response = await fetch(`${targetEndpoint}/models`, {
+      headers: { "Authorization": `Bearer ${key}` },
+      signal: AbortSignal.timeout(10000)
+    });
+    
+    if (response.ok) {
+      const body = await response.json();
+      res.json({ valid: true, models: body.data ? body.data.map((m: any) => m.id) : [] });
+    } else {
+      res.status(response.status).json({ valid: false, status: response.status });
+    }
+  } catch (error) {
+    res.status(500).json({ valid: false, error: "Connection failed" });
+  }
+});
+
+app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     resetHealthCheckInterval();
   });

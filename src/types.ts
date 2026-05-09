@@ -12,7 +12,8 @@ export interface NimKey {
   consecutiveFailures: number;
   tokensConsumed: number;
   lastUsed?: string;
-  latency?: number; // In ms
+  lastHealthCheck?: string;
+  confirmedModels?: string[];
   lastLogs?: {
     timestamp: string;
     model: string;
