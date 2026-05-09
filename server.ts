@@ -451,24 +451,59 @@ app.post("/api/keys/validate", async (req, res) => {
   
   const targetEndpoint = (endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
   
-  console.log(`Validating key against ${targetEndpoint}/models`);
+  console.log(`Validating key against: ${targetEndpoint}/models`);
   
   try {
     const response = await fetch(`${targetEndpoint}/models`, {
-      headers: { "Authorization": `Bearer ${key}` },
+      headers: { 
+        "Authorization": `Bearer ${key}`,
+        "Accept": "application/json"
+      },
       signal: AbortSignal.timeout(10000)
     });
     
+    console.log(`NVIDIA Response: ${response.status} ${response.statusText}`);
+    
     if (response.ok) {
-      const body = await response.json();
-      res.json({ valid: true, models: body.data ? body.data.map((m: any) => m.id) : [] });
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const body = await response.json();
+        const models = body.data ? body.data.map((m: any) => m.id) : [];
+        console.log(`Validation SUCCESS: Found ${models.length} models`);
+        res.json({ 
+          valid: true, 
+          models,
+          message: `验证通过! 发现 ${models.length} 个模型。`
+        });
+      } else {
+        console.warn("Validation FAILED: Expected JSON response, got something else.");
+        res.status(422).json({ 
+          valid: false, 
+          error: "接口返回格式错误 (不是 JSON)",
+          status: response.status
+        });
+      }
     } else {
-      console.log(`Validation failed with status ${response.status}`);
-      res.status(response.status).json({ valid: false, status: response.status });
+      let errorDetail = "验证失败";
+      try {
+        const errorBody = await response.json();
+        errorDetail = errorBody.detail || errorBody.message || errorDetail;
+      } catch (e) {
+        // Not JSON error body
+      }
+      console.log(`Validation FAILED: ${response.status} - ${errorDetail}`);
+      res.status(response.status).json({ 
+        valid: false, 
+        status: response.status,
+        error: errorDetail
+      });
     }
   } catch (error) {
-    console.error("Validation error:", error);
-    res.status(500).json({ valid: false, error: error instanceof Error ? error.message : "Connection failed" });
+    console.error("Validation EXCEPTION:", error);
+    res.status(500).json({ 
+      valid: false, 
+      error: error instanceof Error ? error.message : "无法连接到服务器"
+    });
   }
 });
 

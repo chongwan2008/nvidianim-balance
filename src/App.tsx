@@ -291,14 +291,14 @@ export default function App() {
       });
       const data = await response.json();
       if (data.valid) {
-        setValidationResult({ status: 'success', message: `验证通过! 发现 ${data.models.length} 个可用模型。` });
+        setValidationResult({ status: 'success', message: data.message || `验证通过! 发现 ${data.models.length} 个可用模型。` });
         setFormAvailableModels(data.models);
       } else {
-        const desc = data.status ? getErrorDescription(data.status) : (data.error || 'Unknown error');
+        const desc = data.error || (data.status ? getErrorDescription(data.status) : '未知错误');
         setValidationResult({ status: 'error', message: `验证失败: ${desc}` });
       }
     } catch (e) {
-      setValidationResult({ status: 'error', message: '无法连接到服务端验证接口' });
+      setValidationResult({ status: 'error', message: '网络异常: 无法连接到验证接口' });
     } finally {
       setIsValidating(false);
     }
