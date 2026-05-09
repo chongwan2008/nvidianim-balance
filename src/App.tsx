@@ -43,6 +43,7 @@ export default function App() {
   const [formAvailableModels, setFormAvailableModels] = useState<string[]>([]);
   const [formModelDetails, setFormModelDetails] = useState<Record<string, { contextLength?: number }>>({});
   const [formFetchingModels, setFormFetchingModels] = useState(false);
+  const [formModelSearch, setFormModelSearch] = useState('');
 
   const [newKey, setNewKey] = useState({ 
     name: '', 
@@ -401,7 +402,7 @@ export default function App() {
                 <Activity className="text-[#E4E3E0] w-6 h-6" />
               </div>
               <div>
-                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.2</span></h1>
+                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.2.1</span></h1>
                 <p className="font-mono text-[10px] uppercase opacity-50 tracking-widest leading-none">高可用代理接口</p>
               </div>
             </div>
@@ -879,26 +880,39 @@ export default function App() {
                       
                       {formAvailableModels.length > 0 && (
                         <div className="flex items-center gap-4 text-xs font-mono">
-                          <button 
-                            type="button" 
-                            onClick={() => setNewKey({...newKey, modelFilters: [...formAvailableModels]})}
-                            className="underline hover:no-underline"
-                          >
-                            全选
-                          </button>
-                          <button 
-                            type="button" 
-                            onClick={() => setNewKey({...newKey, modelFilters: []})}
-                            className="underline hover:no-underline"
-                          >
-                            清空
-                          </button>
+                          <div className="flex items-center gap-4">
+                            <button 
+                              type="button" 
+                              onClick={() => setNewKey({...newKey, modelFilters: [...formAvailableModels]})}
+                              className="underline hover:no-underline"
+                            >
+                              全选
+                            </button>
+                            <button 
+                              type="button" 
+                              onClick={() => setNewKey({...newKey, modelFilters: []})}
+                              className="underline hover:no-underline"
+                            >
+                              清空
+                            </button>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <input 
+                              type="text"
+                              placeholder="搜索模型关键词..."
+                              className="w-full border border-[#141414]/20 bg-white p-1 px-2 text-[10px] focus:outline-none"
+                              value={formModelSearch}
+                              onChange={e => setFormModelSearch(e.target.value)}
+                            />
+                          </div>
                         </div>
                       )}
 
                       {formAvailableModels.length > 0 ? (
                         <div className="grid grid-cols-2 gap-2 text-[10px] font-mono max-h-40 overflow-y-auto">
-                          {formAvailableModels.map(model => (
+                          {formAvailableModels
+                            .filter(model => model.toLowerCase().includes(formModelSearch.toLowerCase()))
+                            .map(model => (
                             <label key={model} className="flex items-center gap-2 border border-[#141414]/20 p-1.5 cursor-pointer hover:bg-white transition-colors bg-white/50">
                               <input 
                                 type="checkbox"
@@ -958,7 +972,7 @@ export default function App() {
             <span className="font-mono text-[10px] uppercase tracking-widest leading-none">系统状态：运行中</span>
           </div>
           <p className="font-serif italic text-sm opacity-60">
-            NVIDIA NIM 负载均衡器 v1.2。专为关键任务部署设计。
+            NVIDIA NIM 负载均衡器 v1.2.1。专为关键任务部署设计。
           </p>
         </div>
         <div className="flex items-center gap-8 font-mono text-[10px] uppercase opacity-40">
