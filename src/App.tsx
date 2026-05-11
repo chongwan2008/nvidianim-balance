@@ -402,7 +402,7 @@ export default function App() {
                 <Activity className="text-[#E4E3E0] w-6 h-6" />
               </div>
               <div>
-                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.2.1</span></h1>
+                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.2.2</span></h1>
                 <p className="font-mono text-[10px] uppercase opacity-50 tracking-widest leading-none">高可用代理接口</p>
               </div>
             </div>
@@ -674,14 +674,20 @@ export default function App() {
 
                     <button 
                       onClick={() => {
-                        if (key.confirmedModels) {
-                             setAvailableModels(prev => ({ ...prev, [key.id]: key.confirmedModels! }));
+                        if (availableModels[key.id]) {
+                          setAvailableModels(prev => {
+                            const next = { ...prev };
+                            delete next[key.id];
+                            return next;
+                          });
+                        } else if (key.confirmedModels) {
+                          setAvailableModels(prev => ({ ...prev, [key.id]: key.confirmedModels! }));
                         } else {
-                             fetchModelsForKey(key.id);
+                          fetchModelsForKey(key.id);
                         }
                       }}
                       className={`p-2 transition-colors ${availableModels[key.id] ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-black/5'}`}
-                      title={key.confirmedModels ? "查看已确认模型" : "查询模型"}
+                      title={availableModels[key.id] ? "收起模型列表" : (key.confirmedModels ? "查看已确认模型" : "查询模型")}
                     >
                       <Database size={18} className={fetchingModels === key.id ? "animate-spin" : ""} />
                     </button>
@@ -745,16 +751,26 @@ export default function App() {
                   >
                     <div className="flex items-center justify-between mb-2">
                       <span className="opacity-50">可用模型 ({availableModels[key.id].length}):</span>
-                      <button 
-                        onClick={() => {
-                          const models = availableModels[key.id].join(', ');
-                          navigator.clipboard.writeText(models);
-                          alert('模型列表已复制');
-                        }}
-                        className="underline hover:no-underline"
-                      >
-                        复制全部
-                      </button>
+                      <div className="flex gap-4">
+                        <button 
+                          onClick={() => fetchModelsForKey(key.id)}
+                          disabled={fetchingModels === key.id}
+                          className="underline hover:no-underline flex items-center gap-1"
+                        >
+                          {fetchingModels === key.id ? <RefreshCw size={10} className="animate-spin" /> : null}
+                          更新列表
+                        </button>
+                        <button 
+                          onClick={() => {
+                            const models = availableModels[key.id].join(', ');
+                            navigator.clipboard.writeText(models);
+                            alert('模型列表已复制');
+                          }}
+                          className="underline hover:no-underline"
+                        >
+                          复制全部
+                        </button>
+                      </div>
                     </div>
                     <div className="flex flex-wrap gap-1">
                       {availableModels[key.id].map(modelId => {
@@ -972,7 +988,7 @@ export default function App() {
             <span className="font-mono text-[10px] uppercase tracking-widest leading-none">系统状态：运行中</span>
           </div>
           <p className="font-serif italic text-sm opacity-60">
-            NVIDIA NIM 负载均衡器 v1.2.1。专为关键任务部署设计。
+            NVIDIA NIM 负载均衡器 v1.2.2。专为关键任务部署设计。
           </p>
         </div>
         <div className="flex items-center gap-8 font-mono text-[10px] uppercase opacity-40">
