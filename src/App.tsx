@@ -402,7 +402,7 @@ export default function App() {
                 <Activity className="text-[#E4E3E0] w-6 h-6" />
               </div>
               <div>
-                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.2.2</span></h1>
+                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.2.3</span></h1>
                 <p className="font-mono text-[10px] uppercase opacity-50 tracking-widest leading-none">高可用代理接口</p>
               </div>
             </div>
@@ -988,7 +988,7 @@ export default function App() {
             <span className="font-mono text-[10px] uppercase tracking-widest leading-none">系统状态：运行中</span>
           </div>
           <p className="font-serif italic text-sm opacity-60">
-            NVIDIA NIM 负载均衡器 v1.2.2。专为关键任务部署设计。
+            NVIDIA NIM 负载均衡器 v1.2.3。专为关键任务部署设计。
           </p>
         </div>
         <div className="flex items-center gap-8 font-mono text-[10px] uppercase opacity-40">

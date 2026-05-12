@@ -173,6 +173,9 @@ const detectContextLength = (modelId: string): number | undefined => {
   if (id.includes("gemma-2")) return 8192;
   if (id.includes("qwen")) return 32768;
   if (id.includes("yi-")) return 204800; // 200k usually
+  if (id.includes("deepseek-v3")) return 131072;
+  if (id.includes("deepseek-r1")) return 163840; // 160k
+  if (id.includes("deepseek")) return 65536;
   
   return undefined;
 };
@@ -459,9 +462,12 @@ app.all("/nim-proxy/*", async (req, res) => {
     selectedKey.status = "active";
     selectedKey.consecutiveFailures = 0;
     
-    // Copy headers from target
+    // Copy headers from target, filtering out those that might conflict with our response handling
+    const headersToSkip = ['content-encoding', 'content-length', 'transfer-encoding', 'connection', 'keep-alive', 'access-control-allow-origin'];
     response.headers.forEach((value, key) => {
-      res.setHeader(key, value);
+      if (!headersToSkip.includes(key.toLowerCase())) {
+        res.setHeader(key, value);
+      }
     });
 
     // Handle streaming and tokens (if available in JSON)
