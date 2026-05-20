@@ -37,10 +37,13 @@ interface NimKey {
     path: string;
   }[];
   qpsLimit?: number;
+  rpmLimit?: number;
+  quotaLimit?: number;
+  quotaUsed?: number;
   modelFilters?: string[];
 }
 
-type LBStrategy = "round-robin" | "random" | "least-used";
+type LBStrategy = "round-robin" | "random" | "least-used" | "weighted";
 
 interface NimConfig {
   keys: NimKey[];
@@ -123,6 +126,42 @@ app.get("/api/config", (req, res) => {
   res.json(config);
 });
 
+const detectLimits = (endpoint: string): { rpmLimit?: number, quotaLimit?: number } => {
+  const url = endpoint.toLowerCase();
+  
+  // Groq
+  if (url.includes("api.groq.com")) {
+    return { rpmLimit: 30, quotaLimit: 14400 }; 
+  }
+  
+  // SiliconFlow (Extremely popular for "wool pullers" - 羊毛党)
+  if (url.includes("api.siliconflow.cn")) {
+    return { rpmLimit: 30, quotaLimit: 1000000 }; // Typical free quota is 1M tokens or high
+  }
+
+  // DeepSeek
+  if (url.includes("api.deepseek.com")) {
+    return { rpmLimit: 10, quotaLimit: 1000000 };
+  }
+
+  // SambaNova
+  if (url.includes("api.sambanova.ai")) {
+    return { rpmLimit: 30, quotaLimit: 10000 };
+  }
+  
+  // Together AI
+  if (url.includes("api.together.xyz")) {
+    return { rpmLimit: 5, quotaLimit: 1000 };
+  }
+
+  // DashScope
+  if (url.includes("dashscope.aliyuncs.com")) {
+    return { rpmLimit: 60, quotaLimit: 1000000 };
+  }
+  
+  return {};
+};
+
 app.post("/api/fetch-models", async (req, res) => {
   const { key, endpoint } = req.body;
   if (!key) return res.status(400).json({ error: "Key not provided" });
@@ -142,7 +181,13 @@ app.post("/api/fetch-models", async (req, res) => {
       }));
     }
     
-    res.json(data);
+    // Add recommended limits based on endpoint
+    const recommendations = detectLimits(targetEndpoint);
+    
+    res.json({
+      ...data,
+      recommendations
+    });
   } catch (error) {
     console.error("Fetch models error:", error);
     res.status(500).json({ error: "无法从该 NIM 端点获取模型列表" });
@@ -332,8 +377,9 @@ const keyRequests: Record<string, number[]> = {};
 const checkRateLimit = (keyId?: string) => {
   const now = Date.now();
   const oneSecondAgo = now - 1000;
+  const oneMinuteAgo = now - 60000;
 
-  // Global Check
+  // Global Check (QPS)
   if (config.settings.globalQpsLimit > 0) {
     while (globalRequests.length > 0 && globalRequests[0] < oneSecondAgo) globalRequests.shift();
     if (globalRequests.length >= config.settings.globalQpsLimit) return false;
@@ -342,11 +388,29 @@ const checkRateLimit = (keyId?: string) => {
   // Key Check
   if (keyId) {
     const key = config.keys.find(k => k.id === keyId);
-    if (key?.qpsLimit && key.qpsLimit > 0) {
-      if (!keyRequests[keyId]) keyRequests[keyId] = [];
-      while (keyRequests[keyId].length > 0 && keyRequests[keyId][0] < oneSecondAgo) keyRequests[keyId].shift();
-      if (keyRequests[keyId].length >= key.qpsLimit) return false;
+    if (!key) return true;
+
+    // Check Quota
+    if (key.quotaLimit && key.quotaLimit > 0) {
+      if ((key.quotaUsed || 0) >= key.quotaLimit) return false;
     }
+
+    if (!keyRequests[keyId]) keyRequests[keyId] = [];
+    
+    // QPS Check
+    if (key.qpsLimit && key.qpsLimit > 0) {
+      const qpsWindow = keyRequests[keyId].filter(t => t > oneSecondAgo);
+      if (qpsWindow.length >= key.qpsLimit) return false;
+    }
+
+    // RPM Check
+    if (key.rpmLimit && key.rpmLimit > 0) {
+      const rpmWindow = keyRequests[keyId].filter(t => t > oneMinuteAgo);
+      if (rpmWindow.length >= key.rpmLimit) return false;
+    }
+    
+    // Cleanup keyRequests to prevent memory leak (keep last 1 minute)
+    while (keyRequests[keyId].length > 0 && keyRequests[keyId][0] < oneMinuteAgo) keyRequests[keyId].shift();
   }
 
   return true;
@@ -355,6 +419,14 @@ const checkRateLimit = (keyId?: string) => {
 // Selection Logic
 const selectKey = (model?: string): NimKey | null => {
   let candidates = config.keys.filter(k => k.enabled && k.status !== "circuit-broken");
+
+  // Filter out those that hit quota
+  candidates = candidates.filter(k => {
+    if (k.quotaLimit && k.quotaLimit > 0) {
+      return (k.quotaUsed || 0) < k.quotaLimit;
+    }
+    return true;
+  });
 
   // Smart Routing: Filter by model if key has filters
   if (model) {
@@ -373,6 +445,24 @@ const selectKey = (model?: string): NimKey | null => {
       return candidates[Math.floor(Math.random() * candidates.length)];
     case "least-used":
       return candidates.sort((a, b) => (a.useCount || 0) - (b.useCount || 0))[0];
+    case "weighted": {
+      // Weight calculation based on remaining quota or total quota
+      // If no quota, give a default weight
+      const weights = candidates.map(k => {
+        if (k.quotaLimit && k.quotaLimit > 0) {
+          const remaining = Math.max(0, k.quotaLimit - (k.quotaUsed || 0));
+          return { key: k, weight: Math.max(1, remaining) };
+        }
+        return { key: k, weight: 1000 }; // Default weight for unlimited
+      });
+      const totalWeight = weights.reduce((acc, w) => acc + w.weight, 0);
+      let random = Math.random() * totalWeight;
+      for (const w of weights) {
+        if (random < w.weight) return w.key;
+        random -= w.weight;
+      }
+      return candidates[0];
+    }
     case "round-robin":
     default:
       const key = candidates[currentKeyIndex % candidates.length];
@@ -404,9 +494,15 @@ app.all("/nim-proxy/*", async (req, res) => {
   }
 
   if (!checkRateLimit(selectedKey.id)) {
+    const key = config.keys.find(k => k.id === selectedKey.id);
+    if (key && key.quotaLimit && (key.quotaUsed || 0) >= key.quotaLimit) {
+        selectedKey.status = "circuit-broken"; // Or something else to indicate quota hit
+        saveConfig();
+        return res.status(403).json({ error: `Quota exceeded for key: ${selectedKey.name}` });
+    }
     selectedKey.status = "rate-limited";
     saveConfig();
-    return res.status(429).json({ error: `Rate limit exceeded for key: ${selectedKey.name}` });
+    return res.status(429).json({ error: `Rate limit (QPS/RPM) exceeded for key: ${selectedKey.name}` });
   }
 
   // Log request
@@ -415,6 +511,8 @@ app.all("/nim-proxy/*", async (req, res) => {
   keyRequests[selectedKey.id].push(Date.now());
 
   selectedKey.useCount++;
+  // Increment quota used (default to 1 per request if not tracking tokens precisely yet)
+  selectedKey.quotaUsed = (selectedKey.quotaUsed || 0) + 1;
   selectedKey.lastUsed = new Date().toISOString();
 
   const subPath = req.params[0];
@@ -554,11 +652,14 @@ app.post("/api/keys/check-status", async (req, res) => {
           }));
           console.log(`[Validation] SUCCESS: Found ${models.length} models`);
           
+          const recommendations = detectLimits(targetEndpoint);
+          
           if (models.length === 0) {
             return res.status(401).json({ 
               valid: false, 
               error: "验证失败: 密钥有效但未关联任何模型 (白名单限制?)",
-              status: 401
+              status: 401,
+              recommendations
             });
           }
 
@@ -566,7 +667,8 @@ app.post("/api/keys/check-status", async (req, res) => {
             valid: true, 
             models,
             modelDetails: modelsWithDetails,
-            message: `验证成功! 已发现 ${models.length} 个模型。`
+            message: `验证成功! 已发现 ${models.length} 个模型。`,
+            recommendations
           });
         } else {
           console.warn("[Validation] FAILED: Response body does not contain expected 'data' array");

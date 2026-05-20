@@ -50,9 +50,12 @@ export default function App() {
     key: '', 
     endpoint: '',
     qpsLimit: 0,
+    rpmLimit: 0,
+    quotaLimit: 0,
     modelFilters: [] as string[]
   });
   const [proxyUrl, setProxyUrl] = useState('');
+  const [viewMode, setViewMode] = useState<'endpoints' | 'models'>('endpoints');
 
   useEffect(() => {
     const savedPassword = localStorage.getItem('nim_admin_password');
@@ -150,7 +153,7 @@ export default function App() {
 
   const openAddForm = () => {
     setEditingKeyId(null);
-    setNewKey({ name: '', key: '', endpoint: '', qpsLimit: 0, modelFilters: [] });
+    setNewKey({ name: '', key: '', endpoint: '', qpsLimit: 0, rpmLimit: 0, quotaLimit: 0, modelFilters: [] });
     setFormAvailableModels([]);
     setShowAddForm(true);
   };
@@ -162,6 +165,8 @@ export default function App() {
       key: key.key,
       endpoint: key.endpoint || '',
       qpsLimit: key.qpsLimit || 0,
+      rpmLimit: key.rpmLimit || 0,
+      quotaLimit: key.quotaLimit || 0,
       modelFilters: key.modelFilters || []
     });
     setFormAvailableModels(key.modelFilters || []); // At least show selected
@@ -302,6 +307,15 @@ export default function App() {
         setValidationResult({ status: 'success', message: data.message || `验证通过! 发现 ${data.models.length} 个可用模型。` });
         setFormAvailableModels(data.models);
         
+        // Auto-fill recommendations if currently 0
+        if (data.recommendations) {
+          setNewKey(prev => ({
+            ...prev,
+            rpmLimit: prev.rpmLimit || data.recommendations.rpmLimit || 0,
+            quotaLimit: prev.quotaLimit || data.recommendations.quotaLimit || 0
+          }));
+        }
+
         if (data.modelDetails) {
             const details: Record<string, { contextLength?: number }> = {};
             data.modelDetails.forEach((m: any) => {
@@ -402,7 +416,7 @@ export default function App() {
                 <Activity className="text-[#E4E3E0] w-6 h-6" />
               </div>
               <div>
-                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.2.3</span></h1>
+                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.3.2</span></h1>
                 <p className="font-mono text-[10px] uppercase opacity-50 tracking-widest leading-none">高可用代理接口</p>
               </div>
             </div>
@@ -483,6 +497,7 @@ export default function App() {
                     <option value="round-robin">轮询 (Round Robin)</option>
                     <option value="random">随机 (Random)</option>
                     <option value="least-used">最少使用 (Least Used)</option>
+                    <option value="weighted">比例分配 (Weighted - 基于额度占比)</option>
                   </select>
                 </div>
                 <div className="space-y-2">
@@ -593,202 +608,279 @@ export default function App() {
         {/* Endpoints List */}
         <section className="space-y-4">
           <div className="flex items-center justify-between border-b border-[#141414] pb-2">
-            <h2 className="font-mono text-xs uppercase tracking-widest opacity-50 flex items-center gap-2">
-              <Database size={14} /> 已注册的 NIM 端点
-            </h2>
-            <div className="flex items-center gap-4 font-mono text-[10px] uppercase opacity-50">
-              <span className="hidden sm:inline">状态</span>
-              <span className="hidden sm:inline">负载 (成功/总数)</span>
-              <span className="hidden sm:inline">最后使用</span>
+            <div className="flex items-center gap-6">
+              <button 
+                onClick={() => setViewMode('endpoints')}
+                className={`font-mono text-xs uppercase tracking-widest flex items-center gap-2 pb-1 border-b-2 transition-all ${viewMode === 'endpoints' ? 'border-[#141414] opacity-100' : 'border-transparent opacity-30 hover:opacity-100'}`}
+              >
+                <Database size={14} /> 端点视图 (Endpoints)
+              </button>
+              <button 
+                onClick={() => setViewMode('models')}
+                className={`font-mono text-xs uppercase tracking-widest flex items-center gap-2 pb-1 border-b-2 transition-all ${viewMode === 'models' ? 'border-[#141414] opacity-100' : 'border-transparent opacity-30 hover:opacity-100'}`}
+              >
+                <Activity size={14} /> 模型视图 (Grouped)
+              </button>
             </div>
           </div>
 
           <div className="space-y-2">
-            <AnimatePresence>
-              {config.keys.map((key) => (
-                <React.Fragment key={key.id}>
-                <motion.div 
-                  key={key.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className={`group bg-white border border-[#141414] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:bg-[#F5F5F5] ${!key.enabled ? 'grayscale opacity-60' : ''}`}
-                >
-                  <div className="flex items-center gap-4 flex-1 min-w-0">
-                    <button 
-                      onClick={() => toggleKey(key.id, !key.enabled)}
-                      className={`w-10 h-10 border border-[#141414] flex items-center justify-center transition-colors ${key.enabled ? (key.status === 'circuit-broken' || key.status === 'error' ? 'bg-red-500 text-white' : 'bg-green-500 text-white') : 'bg-gray-200'}`}
+            <AnimatePresence mode="wait">
+              {viewMode === 'endpoints' ? (
+                <motion.div key="endpoints" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-2">
+                  {config.keys.map((key) => (
+                    <React.Fragment key={key.id}>
+                    <motion.div 
+                      key={key.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      className={`group bg-white border border-[#141414] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 transition-all hover:bg-[#F5F5F5] ${!key.enabled ? 'grayscale opacity-60' : ''}`}
                     >
-                      <Key size={18} />
-                    </button>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => openEditForm(key)} className="font-serif italic text-lg leading-tight hover:underline text-left truncate">
-                          {key.name}
+                      <div className="flex items-center gap-4 flex-1 min-w-0">
+                        <button 
+                          onClick={() => toggleKey(key.id, !key.enabled)}
+                          className={`w-10 h-10 border border-[#141414] flex items-center justify-center transition-colors ${key.enabled ? (key.status === 'circuit-broken' || key.status === 'error' ? 'bg-red-500 text-white' : 'bg-green-500 text-white') : 'bg-gray-200'}`}
+                        >
+                          <Key size={18} />
                         </button>
-                        {key.modelFilters && key.modelFilters.length > 0 && (
-                          <span className="px-1 bg-[#141414] text-[#E4E3E0] text-[8px] font-mono rounded">SMART_ROUTING</span>
-                        )}
-                      </div>
-                      <p className="font-mono text-[10px] opacity-50 truncate">
-                        {key.endpoint || (config.settings.defaultEndpoint + ' (默认)')}
-                      </p>
-                    </div>
-                  </div>
-
-                    <div className="flex items-center justify-between sm:justify-end gap-6 font-mono text-sm shrink-0">
-                    <div className="flex items-center gap-2">
-                      {key.status === 'active' ? (
-                        <CheckCircle2 size={16} className="text-green-600" />
-                      ) : key.status === 'circuit-broken' ? (
-                        <AlertCircle size={16} className="text-red-700 animate-pulse" />
-                      ) : (
-                        <AlertCircle size={16} className="text-red-600" />
-                      )}
-                      <div className="flex flex-col">
-                        <span className="hidden sm:inline text-xs uppercase">
-                          {key.status === 'active' ? '活跃' : key.status === 'error' ? '错误' : key.status === 'circuit-broken' ? '熔断' : '限流'}
-                        </span>
-                        {key.status === 'circuit-broken' && (
-                          <button 
-                            onClick={() => resetKeyStatus(key.id)}
-                            className="text-[8px] underline opacity-50 hover:opacity-100"
-                          >
-                            手动恢复
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col items-end sm:w-24">
-                      <span className="text-[10px] opacity-40 uppercase leading-none mb-1">成功/总数</span>
-                      <span className="numeric">{(key.useCount || 0) - (key.errorCount || 0)}/{key.useCount || 0}</span>
-                    </div>
-
-                    <div className="flex flex-col items-end sm:w-32">
-                      <span className="text-[10px] opacity-40 uppercase leading-none mb-1">最后访问</span>
-                      <span className="text-[11px] truncate w-full text-right">
-                        {key.lastUsed ? new Date(key.lastUsed).toLocaleTimeString() : '从未'}
-                      </span>
-                    </div>
-
-                    <button 
-                      onClick={() => {
-                        if (availableModels[key.id]) {
-                          setAvailableModels(prev => {
-                            const next = { ...prev };
-                            delete next[key.id];
-                            return next;
-                          });
-                        } else if (key.confirmedModels) {
-                          setAvailableModels(prev => ({ ...prev, [key.id]: key.confirmedModels! }));
-                        } else {
-                          fetchModelsForKey(key.id);
-                        }
-                      }}
-                      className={`p-2 transition-colors ${availableModels[key.id] ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-black/5'}`}
-                      title={availableModels[key.id] ? "收起模型列表" : (key.confirmedModels ? "查看已确认模型" : "查询模型")}
-                    >
-                      <Database size={18} className={fetchingModels === key.id ? "animate-spin" : ""} />
-                    </button>
-
-                    <button 
-                      onClick={() => setShowLogs(prev => ({ ...prev, [key.id]: !prev[key.id] }))}
-                      className={`p-2 transition-colors ${showLogs[key.id] ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-black/5'}`}
-                      title="查看最后 3 次调用日志"
-                    >
-                      <History size={18} />
-                    </button>
-
-                    <button 
-                      onClick={() => deleteKey(key.id)}
-                      className="p-2 text-red-600 hover:bg-red-50 transition-colors"
-                    >
-                      <Trash2 size={18} />
-                    </button>
-                  </div>
-                </motion.div>
-                
-                {showLogs[key.id] && (
-                  <motion.div 
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    className="mx-4 mb-2 mt-[-8px] bg-[#141414] text-[#E4E3E0] p-4 text-[10px] font-mono shadow-[2px_2px_0px_0px_#141414]"
-                  >
-                    <div className="flex items-center justify-between mb-2 pb-1 border-b border-white/10 uppercase tracking-widest text-[8px]">
-                      <span>近期调用日志 (RECENT_LOGS)</span>
-                      <span>MAX_3</span>
-                    </div>
-                    {key.lastLogs && key.lastLogs.length > 0 ? (
-                      <div className="space-y-2">
-                        {key.lastLogs.map((log, idx) => (
-                          <div key={idx} className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/5 pb-1 last:border-0 ${log.status >= 400 ? 'text-red-400' : ''}`}>
-                            <div className="flex items-center gap-2">
-                              <span className={log.status >= 400 ? 'text-red-400 font-bold' : 'text-green-400'}>[{log.status}]</span>
-                              <span className="opacity-70">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                              <span className="bg-white/10 px-1 rounded truncate max-w-[150px]">{log.model}</span>
-                              {log.status >= 400 && (
-                                <span className="font-bold text-[8px] border border-red-400 px-1 rounded">
-                                  {getErrorDescription(log.status)}
-                                </span>
-                              )}
-                            </div>
-                            <span className="opacity-50 truncate sm:text-right">PATH: {log.path}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => openEditForm(key)} className="font-serif italic text-lg leading-tight hover:underline text-left truncate">
+                              {key.name}
+                            </button>
+                            {key.modelFilters && key.modelFilters.length > 0 && (
+                              <span className="px-1 bg-[#141414] text-[#E4E3E0] text-[8px] font-mono rounded">SMART_ROUTING</span>
+                            )}
                           </div>
-                        ))}
+                          <p className="font-mono text-[10px] opacity-50 truncate flex items-center gap-2">
+                            <span className="truncate max-w-[200px]">{key.endpoint || (config.settings.defaultEndpoint + ' (默认)')}</span>
+                            {key.rpmLimit ? <span className="text-blue-600">RPM: {key.rpmLimit}</span> : null}
+                          </p>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="opacity-40 italic py-2">无历史调用记录</div>
-                    )}
-                  </motion.div>
-                )}
 
-                {availableModels[key.id] && (
-                  <motion.div 
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    className="mx-4 mb-4 mt-[-8px] bg-white border-x border-b border-[#141414] p-4 text-[10px] font-mono shadow-[2px_2px_0px_0px_#141414]"
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="opacity-50">可用模型 ({availableModels[key.id].length}):</span>
-                      <div className="flex gap-4">
-                        <button 
-                          onClick={() => fetchModelsForKey(key.id)}
-                          disabled={fetchingModels === key.id}
-                          className="underline hover:no-underline flex items-center gap-1"
-                        >
-                          {fetchingModels === key.id ? <RefreshCw size={10} className="animate-spin" /> : null}
-                          更新列表
-                        </button>
-                        <button 
-                          onClick={() => {
-                            const models = availableModels[key.id].join(', ');
-                            navigator.clipboard.writeText(models);
-                            alert('模型列表已复制');
-                          }}
-                          className="underline hover:no-underline"
-                        >
-                          复制全部
-                        </button>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {availableModels[key.id].map(modelId => {
-                        const detail = key.modelDetails?.[modelId];
-                        const ctxLen = detail?.contextLength;
-                        const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : null;
-                        return (
-                          <span key={modelId} className="px-1.5 py-0.5 bg-[#F5F5F5] border border-[#141414]/10 rounded select-all flex items-center gap-1">
-                            {modelId}
-                            {ctx && <span className="opacity-40 text-[8px] bg-black/5 px-1 rounded">{ctx}</span>}
+                        <div className="flex items-center justify-between lg:justify-end gap-4 sm:gap-6 font-mono text-sm shrink-0">
+                        <div className="flex items-center gap-2">
+                          {key.status === 'active' ? (
+                            <CheckCircle2 size={16} className="text-green-600" />
+                          ) : key.status === 'circuit-broken' ? (
+                            <AlertCircle size={16} className="text-red-700 animate-pulse" />
+                          ) : (
+                            <AlertCircle size={16} className="text-red-600" />
+                          )}
+                          <div className="flex flex-col">
+                            <span className="hidden lg:inline text-xs uppercase">
+                              {key.status === 'active' ? '活跃' : key.status === 'error' ? '错误' : key.status === 'circuit-broken' ? '熔断' : '限流'}
+                            </span>
+                            {key.status === 'circuit-broken' && (
+                              <button 
+                                onClick={() => resetKeyStatus(key.id)}
+                                className="text-[8px] underline opacity-50 hover:opacity-100"
+                              >
+                                手动恢复
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {key.quotaLimit ? (
+                          <div className="flex flex-col items-end sm:w-28 text-right">
+                             <span className="text-[10px] opacity-40 uppercase leading-none mb-1">额度 (Remaining)</span>
+                             <div className="w-full h-1 bg-black/10 rounded-full overflow-hidden mb-1">
+                                <div 
+                                  className="h-full bg-[#141414] transition-all" 
+                                  style={{ width: `${Math.max(0, Math.min(100, (1 - (key.quotaUsed || 0) / key.quotaLimit) * 100))}%` }}
+                                />
+                             </div>
+                             <span className="numeric text-[10px]">{Math.max(0, key.quotaLimit - (key.quotaUsed || 0))}/{key.quotaLimit}</span>
+                          </div>
+                        ) : null}
+
+                        <div className="flex flex-col items-end sm:w-24">
+                          <span className="text-[10px] opacity-40 uppercase leading-none mb-1">成功/总数</span>
+                          <span className="numeric text-[11px]">{(key.useCount || 0) - (key.errorCount || 0)}/{key.useCount || 0}</span>
+                        </div>
+
+                        <div className="flex flex-col items-end sm:w-32 hidden sm:flex">
+                          <span className="text-[10px] opacity-40 uppercase leading-none mb-1">最后访问</span>
+                          <span className="text-[11px] truncate w-full text-right">
+                            {key.lastUsed ? new Date(key.lastUsed).toLocaleTimeString() : '从未'}
                           </span>
-                        );
-                      })}
-                    </div>
-                  </motion.div>
-                )}
-              </React.Fragment>
-              ))}
+                        </div>
+
+                        <div className="flex gap-1">
+                          <button 
+                            onClick={() => {
+                              if (availableModels[key.id]) {
+                                setAvailableModels(prev => {
+                                  const next = { ...prev };
+                                  delete next[key.id];
+                                  return next;
+                                });
+                              } else if (key.confirmedModels) {
+                                setAvailableModels(prev => ({ ...prev, [key.id]: key.confirmedModels! }));
+                              } else {
+                                fetchModelsForKey(key.id);
+                              }
+                            }}
+                            className={`p-2 transition-colors ${availableModels[key.id] ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-black/5'}`}
+                            title={availableModels[key.id] ? "收起模型列表" : (key.confirmedModels ? "查看已确认模型" : "查询模型")}
+                          >
+                            <Database size={18} className={fetchingModels === key.id ? "animate-spin" : ""} />
+                          </button>
+
+                          <button 
+                            onClick={() => setShowLogs(prev => ({ ...prev, [key.id]: !prev[key.id] }))}
+                            className={`p-2 transition-colors ${showLogs[key.id] ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-black/5'}`}
+                            title="查看最后 3 次调用日志"
+                          >
+                            <History size={18} />
+                          </button>
+
+                          <button 
+                            onClick={() => deleteKey(key.id)}
+                            className="p-2 text-red-600 hover:bg-red-50 transition-colors"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
+                    
+                    {showLogs[key.id] && (
+                      <motion.div 
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        className="mx-4 mb-2 mt-[-8px] bg-[#141414] text-[#E4E3E0] p-4 text-[10px] font-mono shadow-[2px_2px_0px_0px_#141414]"
+                      >
+                        <div className="flex items-center justify-between mb-2 pb-1 border-b border-white/10 uppercase tracking-widest text-[8px]">
+                          <span>近期调用日志 (RECENT_LOGS)</span>
+                          <span>MAX_3</span>
+                        </div>
+                        {key.lastLogs && key.lastLogs.length > 0 ? (
+                          <div className="space-y-2">
+                            {key.lastLogs.map((log, idx) => (
+                              <div key={idx} className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/5 pb-1 last:border-0 ${log.status >= 400 ? 'text-red-400' : ''}`}>
+                                <div className="flex items-center gap-2">
+                                  <span className={log.status >= 400 ? 'text-red-400 font-bold' : 'text-green-400'}>[{log.status}]</span>
+                                  <span className="opacity-70">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                  <span className="bg-white/10 px-1 rounded truncate max-w-[150px]">{log.model}</span>
+                                  {log.status >= 400 && (
+                                    <span className="font-bold text-[8px] border border-red-400 px-1 rounded">
+                                      {getErrorDescription(log.status)}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="opacity-50 truncate sm:text-right">PATH: {log.path}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="opacity-40 italic py-2">无历史调用记录</div>
+                        )}
+                      </motion.div>
+                    )}
+
+                    {availableModels[key.id] && (
+                      <motion.div 
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        className="mx-4 mb-4 mt-[-8px] bg-white border-x border-b border-[#141414] p-4 text-[10px] font-mono shadow-[2px_2px_0px_0px_#141414]"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="opacity-50">可用模型 ({availableModels[key.id].length}):</span>
+                          <div className="flex gap-4">
+                            <button 
+                              onClick={() => fetchModelsForKey(key.id)}
+                              disabled={fetchingModels === key.id}
+                              className="underline hover:no-underline flex items-center gap-1"
+                            >
+                              {fetchingModels === key.id ? <RefreshCw size={10} className="animate-spin" /> : null}
+                              更新列表
+                            </button>
+                            <button 
+                              onClick={() => {
+                                const models = availableModels[key.id].join(', ');
+                                navigator.clipboard.writeText(models);
+                                alert('模型列表已复制');
+                              }}
+                              className="underline hover:no-underline"
+                            >
+                              复制全部
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {availableModels[key.id].map(modelId => {
+                            const detail = key.modelDetails?.[modelId];
+                            const ctxLen = detail?.contextLength;
+                            const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : null;
+                            return (
+                              <span key={modelId} className="px-1.5 py-0.5 bg-[#F5F5F5] border border-[#141414]/10 rounded select-all flex items-center gap-1">
+                                {modelId}
+                                {ctx && <span className="opacity-40 text-[8px] bg-black/5 px-1 rounded">{ctx}</span>}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </motion.div>
+                    )}
+                  </React.Fragment>
+                  ))}
+                </motion.div>
+              ) : (
+                <motion.div key="models" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
+                  {/* Model Grouping View */}
+                  {Array.from(new Set(config.keys.flatMap(k => k.confirmedModels || []) as string[])).sort().map((modelId: string) => {
+                    const keysForModel = config.keys.filter(k => (k.confirmedModels || []).includes(modelId));
+                    if (keysForModel.length === 0) return null;
+                    
+                    // Try to find context length from any key that has it
+                    const sampleKey = keysForModel.find(k => k.modelDetails?.[modelId]?.contextLength);
+                    const ctxLen = sampleKey?.modelDetails?.[modelId]?.contextLength;
+                    const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : null;
+
+                    return (
+                      <div key={modelId} className="bg-white border border-[#141414] shadow-[4px_4px_0px_0px_#141414] overflow-hidden">
+                        <div className="bg-[#141414] text-[#E4E3E0] p-2 px-4 flex justify-between items-center text-[10px] uppercase font-mono tracking-widest">
+                          <div className="flex items-center gap-4">
+                            <span className="bg-white/20 px-2 py-0.5 rounded text-white flex items-center gap-2">
+                              模型: {modelId}
+                              {ctx && <span className="bg-white/10 px-1 rounded text-[8px]">{ctx} CTX</span>}
+                            </span>
+                            <span className="opacity-50">{keysForModel.length} 个端点支持</span>
+                          </div>
+                        </div>
+                        <div className="divide-y divide-[#141414]/10">
+                          {keysForModel.map(key => (
+                             <div key={key.id} className="p-3 px-4 flex items-center justify-between text-xs transition-colors hover:bg-gray-50">
+                               <div className="flex items-center gap-3">
+                                 <div className={`w-2 h-2 rounded-full ${key.status === 'active' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                 <span className="font-serif italic text-sm">{key.name}</span>
+                                 <span className="opacity-40 font-mono text-[9px] truncate max-w-[150px]">{key.endpoint || 'DEFAULT'}</span>
+                               </div>
+                               <div className="flex items-center gap-8 font-mono text-[10px]">
+                                 {key.quotaLimit ? (
+                                   <div className="text-right">
+                                     <span className="opacity-40 mr-2">剩余额度:</span>
+                                     <span className="font-bold">{Math.max(0, key.quotaLimit - (key.quotaUsed || 0))} / {key.quotaLimit}</span>
+                                   </div>
+                                 ) : <span className="opacity-20 uppercase tracking-widest">不限制额度</span>}
+                                 
+                                 <div className="text-right w-20">
+                                   <span className="opacity-40 mr-2">RPM:</span>
+                                   <span>{key.rpmLimit || '∞'}</span>
+                                 </div>
+                               </div>
+                             </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </motion.div>
+              )}
             </AnimatePresence>
 
             {config.keys.length === 0 && !loading && (
@@ -957,7 +1049,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <div className="space-y-1 col-span-2">
+                  <div className="space-y-1 col-span-2 sm:col-span-1">
                     <label className="font-mono text-[10px] uppercase opacity-50">该端点 QPS 限制 (0 为不限)</label>
                     <input 
                       type="number" 
@@ -966,6 +1058,27 @@ export default function App() {
                       value={newKey.qpsLimit}
                       onChange={e => setNewKey({...newKey, qpsLimit: parseInt(e.target.value)})}
                     />
+                  </div>
+                  <div className="space-y-1 col-span-2 sm:col-span-1">
+                    <label className="font-mono text-[10px] uppercase opacity-50">该端点 RPM 限制 (0 为不限)</label>
+                    <input 
+                      type="number" 
+                      placeholder="0"
+                      className="w-full border border-[#141414] p-3 font-mono focus:outline-none focus:bg-[#F5F5F5]"
+                      value={newKey.rpmLimit}
+                      onChange={e => setNewKey({...newKey, rpmLimit: parseInt(e.target.value)})}
+                    />
+                  </div>
+                  <div className="space-y-1 col-span-2">
+                    <label className="font-mono text-[10px] uppercase opacity-50">该端点总额度 (0 为无限制, 通常用于羊毛党权重比例)</label>
+                    <input 
+                      type="number" 
+                      placeholder="0"
+                      className="w-full border border-[#141414] p-3 font-mono focus:outline-none focus:bg-[#F5F5F5]"
+                      value={newKey.quotaLimit}
+                      onChange={e => setNewKey({...newKey, quotaLimit: parseInt(e.target.value)})}
+                    />
+                    <p className="text-[9px] opacity-40 font-mono italic">提示：在比例分配策略下，较大的额度意味着更高的请求权重。</p>
                   </div>
                 </div>
                 <button 
@@ -988,7 +1101,7 @@ export default function App() {
             <span className="font-mono text-[10px] uppercase tracking-widest leading-none">系统状态：运行中</span>
           </div>
           <p className="font-serif italic text-sm opacity-60">
-            NVIDIA NIM 负载均衡器 v1.2.3。专为关键任务部署设计。
+            NVIDIA NIM 负载均衡器 v1.3.2。专为关键任务部署设计。
           </p>
         </div>
         <div className="flex items-center gap-8 font-mono text-[10px] uppercase opacity-40">

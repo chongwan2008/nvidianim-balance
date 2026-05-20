@@ -24,10 +24,13 @@ export interface NimKey {
   
   // Per-key Config
   qpsLimit?: number; // 0 or undefined means unlimited
+  rpmLimit?: number; // Requests Per Minute
+  quotaLimit?: number; // Total quota (e.g. tokens or requests, default to 0 for unlimited)
+  quotaUsed?: number;  // Current usage
   modelFilters?: string[]; // Only handle specific models
 }
 
-export type LBStrategy = "round-robin" | "random" | "least-used";
+export type LBStrategy = "round-robin" | "random" | "least-used" | "weighted";
 
 export interface NimConfig {
   keys: NimKey[];
