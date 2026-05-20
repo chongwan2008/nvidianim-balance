@@ -1,6 +1,6 @@
 {
-  "name": "NVIDIA NIM 负载均衡器 v1.4.0",
-  "description": "专为 NVIDIA NIM 端点设计的高性能代理和负载均衡器，支持轮询分配和实时状态监控仪表板。",
+  "name": "NVIDIA NIM & 多端点通用负载均衡器 v2.0.0",
+  "description": "基于 OpenAI 协议的高可用、多端点通用负载均衡代理。深度兼容 SiliconFlow、Groq、SambaNova、DeepSeek、Zhipu、Gemini 及自建 NVIDIA NIM 等 API 提供商，具备实时高并发统计、自动断路熔断、多节点多负载策略等企业级网关能力。",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
