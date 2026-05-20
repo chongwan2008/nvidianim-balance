@@ -17,7 +17,15 @@ import {
   AlertCircle,
   Clock,
   Key,
-  History
+  History,
+  Sparkles,
+  MessageSquare,
+  Image as ImageIcon,
+  Download,
+  Send,
+  Play,
+  Upload,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { NimKey, NimConfig } from './types';
@@ -68,7 +76,10 @@ const detectModelType = (modelId: string): { label: string; bgClass: string; tex
     id.includes("kolors") || 
     id.includes("midjourney") || 
     id.includes("dall-e") || 
-    id.includes("imagen")
+    id.includes("imagen") ||
+    id.includes("sana") ||
+    id.includes("cogview") ||
+    id.includes("playground")
   ) {
     return { label: "生图 | Image", bgClass: "bg-pink-100 text-pink-800 border-pink-200", textClass: "text-pink-600" };
   }
@@ -124,10 +135,209 @@ export default function App() {
     qpsLimit: 0,
     rpmLimit: 0,
     quotaLimit: 0,
-    modelFilters: [] as string[]
+    modelFilters: [] as string[],
+    enabled: true
   });
   const [proxyUrl, setProxyUrl] = useState('');
-  const [viewMode, setViewMode] = useState<'endpoints' | 'models'>('endpoints');
+  const [viewMode, setViewMode] = useState<'endpoints' | 'models' | 'playground'>('endpoints');
+
+  // Playground States
+  const [playgroundModel, setPlaygroundModel] = useState<string>('');
+  const [playgroundPrompt, setPlaygroundPrompt] = useState<string>('');
+  const [playgroundResponse, setPlaygroundResponse] = useState<string>('');
+  const [playgroundImageUrl, setPlaygroundImageUrl] = useState<string>('');
+  const [playgroundImageBase64, setPlaygroundImageBase64] = useState<string>('');
+  const [playgroundVisionImage, setPlaygroundVisionImage] = useState<string | null>(null);
+  const [playgroundVisionFilename, setPlaygroundVisionFilename] = useState<string | null>(null);
+  const [playgroundLoading, setPlaygroundLoading] = useState<boolean>(false);
+  const [playgroundSystemPrompt, setPlaygroundSystemPrompt] = useState<string>('你是一个人工智能助手。');
+  const [playgroundTemperature, setPlaygroundTemperature] = useState<number>(0.7);
+  const [playgroundImageSize, setPlaygroundImageSize] = useState<string>('1024x1024');
+  const [playgroundStream, setPlaygroundStream] = useState<boolean>(true);
+  const [playgroundLogs, setPlaygroundLogs] = useState<{ router?: string; duration?: number; tokens?: number } | null>(null);
+
+  const allModels = Array.from(new Set(config.keys.flatMap(k => k.confirmedModels || []) as string[])).sort();
+
+  useEffect(() => {
+    if (viewMode === 'playground' && !playgroundModel && allModels.length > 0) {
+      setPlaygroundModel(allModels[0]);
+    }
+  }, [viewMode, allModels, playgroundModel]);
+
+  const handleVisionImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    if (!file.type.startsWith('image/')) {
+      alert("仅支持上传图片格式文件");
+      return;
+    }
+    
+    if (file.size > 4 * 1024 * 1024) {
+      alert("上传文件限制在 4MB 以内以确保调用响应速度。");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setPlaygroundVisionImage(reader.result);
+        setPlaygroundVisionFilename(file.name);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handlePlaygroundSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!playgroundModel) {
+      alert("请先选择模型");
+      return;
+    }
+    if (!playgroundPrompt.trim()) {
+      alert("请输入提示词 / Prompt");
+      return;
+    }
+    
+    setPlaygroundLoading(true);
+    setPlaygroundResponse('');
+    setPlaygroundImageUrl('');
+    setPlaygroundImageBase64('');
+    setPlaygroundLogs(null);
+    const startTime = Date.now();
+    
+    const isImageModel = detectModelType(playgroundModel).label.includes("生图") || detectModelType(playgroundModel).label.includes("Image");
+    
+    try {
+      if (isImageModel) {
+        // Image generation
+        const response = await fetch('/nim-proxy/v1/images/generations', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(config.settings.masterKey ? { 'Authorization': `Bearer ${config.settings.masterKey}` } : {})
+          },
+          body: JSON.stringify({
+            model: playgroundModel,
+            prompt: playgroundPrompt,
+            n: 1,
+            size: playgroundImageSize,
+            response_format: 'b64_json'
+          })
+        });
+        
+        const duration = Date.now() - startTime;
+        
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.error?.message || errData.error || `请求失败 [${response.status}]`);
+        }
+        
+        const resJson = await response.json();
+        const b64 = resJson.data?.[0]?.b64_json;
+        const url = resJson.data?.[0]?.url;
+        
+        if (b64) {
+          setPlaygroundImageBase64(b64);
+        } else if (url) {
+          setPlaygroundImageUrl(url);
+        } else {
+          throw new Error("没能从 NIM 端点返回有效的图像数据");
+        }
+        
+        const activeKey = config.keys.find(k => k.confirmedModels?.includes(playgroundModel));
+        setPlaygroundLogs({
+          router: activeKey ? activeKey.name : '智能路由分流',
+          duration: duration
+        });
+      } else {
+        // Chat completion
+        const isVision = detectModelType(playgroundModel).label.includes("视觉") || detectModelType(playgroundModel).label.includes("Vision");
+        const userContent = (isVision && playgroundVisionImage)
+          ? [
+              { type: 'text', text: playgroundPrompt },
+              { type: 'image_url', image_url: { url: playgroundVisionImage } }
+            ]
+          : playgroundPrompt;
+
+        const requestBody = {
+          model: playgroundModel,
+          messages: [
+            ...(playgroundSystemPrompt ? [{ role: 'system', content: playgroundSystemPrompt }] : []),
+            { role: 'user', content: userContent }
+          ],
+          temperature: playgroundTemperature,
+          stream: playgroundStream
+        };
+        
+        const response = await fetch('/nim-proxy/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(config.settings.masterKey ? { 'Authorization': `Bearer ${config.settings.masterKey}` } : {})
+          },
+          body: JSON.stringify(requestBody)
+        });
+        
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.error?.message || errData.error || `请求失败 [${response.status}]`);
+        }
+        
+        const activeKey = config.keys.find(k => k.confirmedModels?.includes(playgroundModel));
+        
+        if (playgroundStream && response.body) {
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let accumulated = "";
+          
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value, { stream: true });
+            accumulated += chunk;
+            
+            const lines = accumulated.split("\n");
+            accumulated = lines.pop() || "";
+            
+            for (const line of lines) {
+              const cleaned = line.trim();
+              if (!cleaned) continue;
+              if (cleaned === "data: [DONE]") continue;
+              if (cleaned.startsWith("data: ")) {
+                try {
+                  const parsed = JSON.parse(cleaned.slice(6));
+                  const delta = parsed.choices?.[0]?.delta?.content || "";
+                  setPlaygroundResponse(prev => prev + delta);
+                } catch (e) {
+                  // ignore
+                }
+              }
+            }
+          }
+          
+          setPlaygroundLogs({
+            router: activeKey ? activeKey.name : '智能路由分流',
+            duration: Date.now() - startTime
+          });
+        } else {
+          const resJson = await response.json();
+          setPlaygroundResponse(resJson.choices?.[0]?.message?.content || '');
+          setPlaygroundLogs({
+            router: activeKey ? activeKey.name : '智能路由分流',
+            duration: Date.now() - startTime,
+            tokens: resJson.usage?.total_tokens
+          });
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      setPlaygroundResponse(`请求出错: ${err.message || "未知错误"}`);
+    } finally {
+      setPlaygroundLoading(false);
+    }
+  };
 
   useEffect(() => {
     const savedPassword = localStorage.getItem('nim_admin_password');
@@ -225,7 +435,7 @@ export default function App() {
 
   const openAddForm = () => {
     setEditingKeyId(null);
-    setNewKey({ name: '', key: '', endpoint: '', qpsLimit: 0, rpmLimit: 0, quotaLimit: 0, modelFilters: [] });
+    setNewKey({ name: '', key: '', endpoint: '', qpsLimit: 0, rpmLimit: 0, quotaLimit: 0, modelFilters: [], enabled: true });
     setFormAvailableModels([]);
     setShowAddForm(true);
   };
@@ -239,7 +449,8 @@ export default function App() {
       qpsLimit: key.qpsLimit || 0,
       rpmLimit: key.rpmLimit || 0,
       quotaLimit: key.quotaLimit || 0,
-      modelFilters: key.modelFilters || []
+      modelFilters: key.modelFilters || [],
+      enabled: key.enabled !== false
     });
     setFormAvailableModels(key.modelFilters || []); // At least show selected
     setShowAddForm(true);
@@ -262,7 +473,7 @@ export default function App() {
       });
       const data = await response.json();
       if (data.data) {
-        const models = data.data.map((m: any) => m.id);
+        const models = Array.from(new Set(data.data.map((m: any) => m.id) as string[]));
         const details: Record<string, { contextLength?: number }> = {};
         data.data.forEach((m: any) => {
           details[m.id] = { contextLength: m.contextLength };
@@ -377,7 +588,7 @@ export default function App() {
       const data = await response.json();
       if (data.valid) {
         setValidationResult({ status: 'success', message: data.message || `验证通过! 发现 ${data.models.length} 个可用模型。` });
-        setFormAvailableModels(data.models);
+        setFormAvailableModels(Array.from(new Set(data.models as string[])));
         
         // Auto-fill recommendations if currently 0
         if (data.recommendations) {
@@ -693,6 +904,12 @@ export default function App() {
               >
                 <Activity size={14} /> 模型视图 (Grouped)
               </button>
+              <button 
+                onClick={() => setViewMode('playground')}
+                className={`font-mono text-xs uppercase tracking-widest flex items-center gap-2 pb-1 border-b-2 transition-all ${viewMode === 'playground' ? 'border-[#141414] opacity-100' : 'border-transparent opacity-30 hover:opacity-100'}`}
+              >
+                <Sparkles size={14} /> 极简沙盒 (Playground)
+              </button>
             </div>
           </div>
 
@@ -905,7 +1122,7 @@ export default function App() {
                   </React.Fragment>
                   ))}
                 </motion.div>
-              ) : (
+              ) : viewMode === 'models' ? (
                 <motion.div key="models" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
                   {/* Model Grouping View */}
                   {Array.from(new Set(config.keys.flatMap(k => k.confirmedModels || []) as string[])).sort().map((modelId: string) => {
@@ -960,6 +1177,278 @@ export default function App() {
                     );
                   })}
                 </motion.div>
+              ) : (
+                <motion.div 
+                  key="playground" 
+                  initial={{ opacity: 0, y: 10 }} 
+                  animate={{ opacity: 1, y: 0 }} 
+                  exit={{ opacity: 0 }} 
+                  className="space-y-6"
+                >
+                  {allModels.length === 0 ? (
+                    <div className="border border-dashed border-[#141414] p-12 text-center space-y-4">
+                      <Sparkles className="w-12 h-12 mx-auto opacity-20 animate-pulse" />
+                      <p className="font-serif italic text-xl opacity-50">无可用的活端点模型以启动沙盒。</p>
+                      <p className="text-xs opacity-40 max-w-md mx-auto">请先确保您已经添加了一个支持模型路由的 NVIDIA NIM 密钥，并成功“拉取模型列表”。</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                      {/* Left Side: Parameters Form */}
+                      <form onSubmit={handlePlaygroundSubmit} className="lg:col-span-5 space-y-6 bg-white border border-[#141414] p-6 shadow-[4px_4px_0px_0px_#141414]">
+                        <div className="border-b border-[#141414] pb-4 flex items-center justify-between">
+                          <span className="font-mono text-xs uppercase tracking-widest font-bold">配置测试面板 (PARAMS)</span>
+                          <span className="font-mono text-[9px] bg-black text-white px-2 py-0.5 rounded uppercase">
+                            {detectModelType(playgroundModel).label.split(" | ")[0]} Mode
+                          </span>
+                        </div>
+
+                        {/* Model Selector */}
+                        <div className="space-y-1">
+                          <label className="font-mono text-[10px] uppercase opacity-50 block">选择测试模型</label>
+                          <select 
+                            value={playgroundModel}
+                            onChange={(e) => {
+                              setPlaygroundModel(e.target.value);
+                              setPlaygroundPrompt('');
+                              setPlaygroundResponse('');
+                              setPlaygroundImageUrl('');
+                              setPlaygroundImageBase64('');
+                              setPlaygroundLogs(null);
+                              setPlaygroundVisionImage(null);
+                              setPlaygroundVisionFilename(null);
+                            }}
+                            className="w-full border border-[#141414] p-3 font-mono text-xs focus:outline-none focus:bg-gray-50"
+                          >
+                            {allModels.map(model => {
+                              const modelType = detectModelType(model);
+                              return (
+                                <option key={model} value={model}>
+                                  [{modelType.label.split(" | ")[0]}] {model}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+
+                        {/* Parameter Controls based on Model Type */}
+                        {!detectModelType(playgroundModel).label.includes("生图") && !detectModelType(playgroundModel).label.includes("Image") ? (
+                          <>
+                            {/* Text Model Controls */}
+                            <div className="space-y-1">
+                              <label className="font-mono text-[10px] uppercase opacity-50 block">系统 Prompt (System instructions)</label>
+                              <textarea 
+                                rows={2}
+                                value={playgroundSystemPrompt}
+                                onChange={(e) => setPlaygroundSystemPrompt(e.target.value)}
+                                className="w-full border border-[#141414] p-2 font-mono text-xs focus:outline-none focus:bg-gray-50"
+                              />
+                            </div>
+
+                            {/* Vision Model Image Upload Area */}
+                            {(detectModelType(playgroundModel).label.includes("视觉") || detectModelType(playgroundModel).label.includes("Vision")) && (
+                              <div className="space-y-1 bg-purple-50/40 p-4 border border-dashed border-purple-300 rounded">
+                                <label className="font-mono text-[10px] uppercase text-purple-700 font-bold block flex items-center gap-1.5">
+                                  <ImageIcon size={12} /> 视觉输入 (Vision/Multimodal Input)
+                                </label>
+                                
+                                {!playgroundVisionImage ? (
+                                  <label className="flex flex-col items-center justify-center border-2 border-dashed border-purple-200 hover:border-purple-400 bg-white p-4 rounded cursor-pointer transition-colors group">
+                                    <Upload size={18} className="text-purple-400 group-hover:text-purple-600 mb-1.5 animate-bounce" />
+                                    <span className="font-sans text-xs font-semibold text-purple-700 mb-0.5">点击或拖拽上传图片</span>
+                                    <span className="text-[10px] text-gray-400 scale-95 origin-center font-mono">PNG, JPG, WEBP (最大 4MB)</span>
+                                    <input 
+                                      type="file" 
+                                      accept="image/*" 
+                                      onChange={handleVisionImageUpload} 
+                                      className="hidden" 
+                                    />
+                                  </label>
+                                ) : (
+                                  <div className="flex items-center gap-3 bg-white p-2 border border-purple-200 rounded">
+                                    <img 
+                                      src={playgroundVisionImage} 
+                                      alt="Vision Input Preview" 
+                                      className="w-12 h-12 object-cover rounded border border-[#141414]/10"
+                                      referrerPolicy="no-referrer"
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-[11px] font-medium text-gray-700 truncate">{playgroundVisionFilename}</p>
+                                      <p className="text-[9px] text-gray-400 font-mono">已成功加载 Base64 资源</p>
+                                    </div>
+                                    <button 
+                                      type="button"
+                                      onClick={() => {
+                                        setPlaygroundVisionImage(null);
+                                        setPlaygroundVisionFilename(null);
+                                      }}
+                                      className="p-1.5 hover:bg-red-50 text-red-500 rounded transition-colors"
+                                      title="移除图片"
+                                    >
+                                      <X size={14} />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-1">
+                                <label className="font-mono text-[10px] uppercase opacity-50 block">随机度 (Temperature): {playgroundTemperature}</label>
+                                <input 
+                                  type="range"
+                                  min="0"
+                                  max="2"
+                                  step="0.1"
+                                  value={playgroundTemperature}
+                                  onChange={(e) => setPlaygroundTemperature(parseFloat(e.target.value))}
+                                  className="w-full accent-[#141414]"
+                                />
+                              </div>
+                              <div className="space-y-1 flex items-center justify-end border-t border-transparent pt-3">
+                                <label className="flex items-center gap-2 cursor-pointer select-none">
+                                  <input 
+                                    type="checkbox"
+                                    checked={playgroundStream}
+                                    onChange={(e) => setPlaygroundStream(e.target.checked)}
+                                    className="accent-[#141414]"
+                                  />
+                                  <span className="font-mono text-[10px] uppercase opacity-50">流式输出 Stream</span>
+                                </label>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* Image Model Controls */}
+                            <div className="space-y-1">
+                              <label className="font-mono text-[10px] uppercase opacity-50 block">图像尺寸 (Dimensions)</label>
+                              <select 
+                                value={playgroundImageSize}
+                                onChange={(e) => setPlaygroundImageSize(e.target.value)}
+                                className="w-full border border-[#141414] p-3 font-mono text-xs focus:outline-none focus:bg-gray-50"
+                              >
+                                <option value="1024x1024">1024 x 1024 (1:1 正方形)</option>
+                                <option value="512x512">512 x 512 (小正方形)</option>
+                                <option value="1216x832">1216 x 832 (高清 3:2 横屏)</option>
+                                <option value="832x1216">832 x 1216 (高清 2:3 竖屏)</option>
+                              </select>
+                            </div>
+                          </>
+                        )}
+
+                        {/* Common Prompt Field */}
+                        <div className="space-y-1">
+                          <label className="font-mono text-[10px] uppercase opacity-50 block">
+                            {detectModelType(playgroundModel).label.includes("生图") || detectModelType(playgroundModel).label.includes("Image") ? "生图提示词 (Prompt)" : "对话 Prompt"}
+                          </label>
+                          <textarea 
+                            required
+                            rows={4}
+                            placeholder={detectModelType(playgroundModel).label.includes("生图") || detectModelType(playgroundModel).label.includes("Image") ? "一个精致的水彩画，画中是一个古朴的东方茶室，窗外桃花盛开，柔和的光线射入..." : "写一段关于人工智能高可用负载均衡器的诗吧..."}
+                            value={playgroundPrompt}
+                            onChange={(e) => setPlaygroundPrompt(e.target.value)}
+                            className="w-full border border-[#141414] p-3 text-xs focus:outline-none focus:bg-gray-50 font-sans"
+                          />
+                        </div>
+
+                        {/* Submit Button */}
+                        <button 
+                          type="submit"
+                          disabled={playgroundLoading}
+                          className="w-full bg-[#141414] text-[#E4E3E0] p-4 font-mono text-xs uppercase tracking-widest hover:bg-[#333] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                          {playgroundLoading ? (
+                            <>
+                              <RefreshCw size={14} className="animate-spin" />
+                              <span>模型计算中... / 正在响应</span>
+                            </>
+                          ) : (
+                            <>
+                              {detectModelType(playgroundModel).label.includes("生图") || detectModelType(playgroundModel).label.includes("Image") ? <Play size={14} /> : <Send size={14} />}
+                              <span>
+                                {detectModelType(playgroundModel).label.includes("生图") || detectModelType(playgroundModel).label.includes("Image") ? "生成图像" : "发送消息"}
+                              </span>
+                            </>
+                          )}
+                        </button>
+                      </form>
+
+                      {/* Right Side: Visual Output Window */}
+                      <div className="lg:col-span-7 flex flex-col bg-white border border-[#141414] p-6 shadow-[4px_4px_0px_0px_#141414] min-h-[400px]">
+                        <div className="border-b border-[#141414] pb-4 flex items-center justify-between mb-4">
+                          <span className="font-mono text-xs uppercase tracking-widest font-bold">响应窗口 (LIVE_RESPONSE)</span>
+                          {playgroundLogs && (
+                            <span className="font-mono text-[9px] text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded border border-green-200">
+                              分流节点: {playgroundLogs.router} | {playgroundLogs.duration}ms {playgroundLogs.tokens ? `| Token: ${playgroundLogs.tokens}` : ''}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Render Workspace */}
+                        <div className="flex-1 flex flex-col min-h-[320px] bg-[#F5F5F5] border border-[#141414]/10 p-4 relative overflow-hidden font-mono text-xs rounded">
+                          {playgroundLoading && !playgroundResponse && (
+                            <div className="absolute inset-0 bg-white/70 backdrop-blur-xs flex flex-col items-center justify-center space-y-4 z-10 text-center p-6 bg-opacity-70">
+                              <RefreshCw size={32} className="text-[#141414] animate-spin" />
+                              <div className="space-y-1">
+                                <p className="font-mono uppercase font-bold text-xs tracking-wider text-[#141414]">NIM_ROUTING_IN_PROGRESS</p>
+                                <p className="text-[10px] opacity-60">正在调用高可用端点进行在线代理计算...</p>
+                              </div>
+                            </div>
+                          )}
+
+                          {!playgroundLoading && !playgroundResponse && !playgroundImageBase64 && !playgroundImageUrl ? (
+                            <div className="flex-1 flex flex-col items-center justify-center text-center p-8 opacity-40">
+                              <Sparkles size={28} className="mb-2" />
+                              <p className="font-serif italic text-sm mb-1">等待接收 NIM 路由执行结果</p>
+                              <p className="text-[10px]">在左侧输入指令，负载均衡器会自动分析并健康分流</p>
+                            </div>
+                          ) : detectModelType(playgroundModel).label.includes("生图") || detectModelType(playgroundModel).label.includes("Image") ? (
+                            /* Image Output Frame */
+                            <div className="flex-1 flex flex-col items-center justify-center space-y-4">
+                              {(playgroundImageBase64 || playgroundImageUrl) ? (
+                                <div className="space-y-4 w-full max-w-md flex flex-col items-center">
+                                  <div className="relative group overflow-hidden border-2 border-[#141414] shadow-[4px_4px_0px_0px_#141414] bg-white">
+                                    <img 
+                                      src={playgroundImageBase64 ? `data:image/png;base64,${playgroundImageBase64}` : playgroundImageUrl} 
+                                      alt="Generated creative"
+                                      className="max-h-[350px] w-auto max-w-full object-contain pointer-events-auto select-all"
+                                      referrerPolicy="no-referrer"
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-4">
+                                    <a 
+                                      href={playgroundImageBase64 ? `data:image/png;base64,${playgroundImageBase64}` : playgroundImageUrl}
+                                      download={`nvidia-nim-image-${Date.now()}.png`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-[10px] font-mono px-3 py-1 bg-white border border-[#141414] shadow-[1px_1px_0px_0px_#141414] hover:bg-black hover:text-white transition-colors flex items-center gap-1 leading-none uppercase font-bold"
+                                    >
+                                      <Download size={12} /> 下载图片
+                                    </a>
+                                  </div>
+                                </div>
+                              ) : (
+                                playgroundLoading && (
+                                  <div className="flex-1 flex flex-col items-center justify-center bg-transparent py-12">
+                                    <div className="w-16 h-16 border-2 border-dashed border-[#141414] rounded-full animate-spin flex items-center justify-center">
+                                      <ImageIcon size={24} className="opacity-50" />
+                                    </div>
+                                    <p className="text-[10px] font-mono uppercase tracking-widest mt-4">Pencil Rendering...</p>
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          ) : (
+                            /* Chat / Text Output Frame */
+                            <div className="flex-1 overflow-y-auto whitespace-pre-wrap font-mono text-xs leading-relaxed max-h-[450px] bg-white p-4 border border-[#141414]/10 select-text select-all">
+                              {playgroundResponse || (playgroundLoading && <span className="animate-pulse">_</span>)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </motion.div>
               )}
             </AnimatePresence>
 
@@ -1004,6 +1493,25 @@ export default function App() {
                       value={newKey.name}
                       onChange={e => setNewKey({...newKey, name: e.target.value})}
                     />
+                  </div>
+                  <div className="space-y-1 col-span-2">
+                    <label className="font-mono text-[10px] uppercase opacity-50 block">端点状态 (Endpoint Status)</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNewKey({...newKey, enabled: true})}
+                        className={`flex-1 p-3 font-mono text-xs uppercase border border-[#141414] transition-colors ${newKey.enabled ? 'bg-green-500 text-white border-green-600 font-bold' : 'hover:bg-gray-50 text-[gray]'}`}
+                      >
+                        ✓ 启用 (Enabled)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNewKey({...newKey, enabled: false})}
+                        className={`flex-1 p-3 font-mono text-xs uppercase border border-[#141414] transition-colors ${!newKey.enabled ? 'bg-red-500 text-white border-red-600 font-bold' : 'hover:bg-gray-50 text-[gray]'}`}
+                      >
+                        ✗ 禁用 (Disabled)
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-1 col-span-2">
                     <label className="font-mono text-[10px] uppercase opacity-50">API 密钥 (API Key)</label>

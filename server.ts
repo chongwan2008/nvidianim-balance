@@ -240,14 +240,21 @@ app.get("/api/models/:keyId", async (req, res) => {
     // Enrich with context length
     if (data.data) {
       if (!key.modelDetails) key.modelDetails = {};
+      const uniqueModelIds = new Set<string>();
+      const uniqueData: any[] = [];
       data.data.forEach((m: any) => {
-        key.modelDetails![m.id] = {
-          id: m.id,
-          contextLength: detectContextLength(m.id),
-          ownedBy: m.owned_by
-        };
+        if (m && m.id && !uniqueModelIds.has(m.id)) {
+          uniqueModelIds.add(m.id);
+          uniqueData.push(m);
+          key.modelDetails![m.id] = {
+            id: m.id,
+            contextLength: detectContextLength(m.id),
+            ownedBy: m.owned_by
+          };
+        }
       });
-      key.confirmedModels = data.data.map((m: any) => m.id);
+      key.confirmedModels = Array.from(uniqueModelIds);
+      data.data = uniqueData;
       saveConfig();
     }
     
@@ -259,13 +266,17 @@ app.get("/api/models/:keyId", async (req, res) => {
 });
 
 app.post("/api/keys", (req, res) => {
-  const { name, key, endpoint } = req.body;
+  const { name, key, endpoint, enabled, qpsLimit, rpmLimit, quotaLimit, modelFilters } = req.body;
   const newKey: NimKey = {
     id: Math.random().toString(36).substring(7),
     name: name || "NIM Key",
     key,
     endpoint: endpoint || "",
-    enabled: true,
+    enabled: enabled !== undefined ? enabled : true,
+    qpsLimit: qpsLimit || 0,
+    rpmLimit: rpmLimit || 0,
+    quotaLimit: quotaLimit || 0,
+    modelFilters: modelFilters || [],
     useCount: 0,
     errorCount: 0,
     consecutiveFailures: 0,
@@ -322,15 +333,19 @@ async function runHealthCheck() {
       if (response.ok) {
         const body = await response.json();
         if (body.data) {
-          key.confirmedModels = body.data.map((m: any) => m.id);
           if (!key.modelDetails) key.modelDetails = {};
+          const uniqueModelIds = new Set<string>();
           body.data.forEach((m: any) => {
-            key.modelDetails![m.id] = {
-              id: m.id,
-              contextLength: detectContextLength(m.id),
-              ownedBy: m.owned_by
-            };
+            if (m && m.id && !uniqueModelIds.has(m.id)) {
+              uniqueModelIds.add(m.id);
+              key.modelDetails![m.id] = {
+                id: m.id,
+                contextLength: detectContextLength(m.id),
+                ownedBy: m.owned_by
+              };
+            }
           });
+          key.confirmedModels = Array.from(uniqueModelIds);
         }
         
         if (key.status !== "active") {
@@ -514,7 +529,10 @@ const detectModelType = (modelId: string): string => {
     id.includes("kolors") || 
     id.includes("midjourney") || 
     id.includes("dall-e") || 
-    id.includes("imagen")
+    id.includes("imagen") ||
+    id.includes("sana") ||
+    id.includes("cogview") ||
+    id.includes("playground")
   ) {
     return "Image";
   }
@@ -628,7 +646,10 @@ app.all("/nim-proxy/*", async (req, res) => {
 
   const subPath = req.params[0];
   const endpoint = (selectedKey.endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
-  const targetUrl = `${endpoint}/${subPath}`;
+  let targetUrl = `${endpoint}/${subPath}`;
+  if (endpoint.endsWith("/v1") && subPath.startsWith("v1/")) {
+    targetUrl = `${endpoint}/${subPath.slice(3)}`;
+  }
 
   try {
     const response = await fetch(targetUrl, {
@@ -663,7 +684,28 @@ app.all("/nim-proxy/*", async (req, res) => {
        }
        saveConfig();
 
-       const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+       let errorData: any;
+       try {
+         errorData = await response.json();
+       } catch (jsonErr) {
+         try {
+           const errMsgText = await response.text();
+           errorData = { error: errMsgText || `Upstream error [${response.status}]` };
+         } catch (txtErr) {
+           errorData = { error: `Upstream error [${response.status}]` };
+         }
+       }
+
+       if (errorData && typeof errorData === 'object') {
+         if (!errorData.error) {
+           errorData = { error: JSON.stringify(errorData) };
+         }
+       } else if (typeof errorData === 'string') {
+         errorData = { error: errorData };
+       } else {
+         errorData = { error: "Unknown error" };
+       }
+
        return res.status(response.status).json(errorData);
     }
 
@@ -755,12 +797,21 @@ app.post("/api/keys/check-status", async (req, res) => {
         
         // Strict check: must have a 'data' array
         if (body && Array.isArray(body.data)) {
-          const models = body.data.map((m: any) => m.id);
-          const modelsWithDetails = body.data.map((m: any) => ({
-            id: m.id,
-            contextLength: detectContextLength(m.id),
-            ownedBy: m.owned_by
-          }));
+          const uniqueModelIds = new Set<string>();
+          const modelsWithDetails: any[] = [];
+          
+          body.data.forEach((m: any) => {
+            if (m && m.id && !uniqueModelIds.has(m.id)) {
+              uniqueModelIds.add(m.id);
+              modelsWithDetails.push({
+                id: m.id,
+                contextLength: detectContextLength(m.id),
+                ownedBy: m.owned_by
+              });
+            }
+          });
+          
+          const models = Array.from(uniqueModelIds);
           console.log(`[Validation] SUCCESS: Found ${models.length} models`);
           
           const recommendations = detectLimits(targetEndpoint);
