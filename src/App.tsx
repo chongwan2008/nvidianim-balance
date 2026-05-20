@@ -22,6 +22,78 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { NimKey, NimConfig } from './types';
 
+const detectModelType = (modelId: string): { label: string; bgClass: string; textClass: string } => {
+  const id = modelId.toLowerCase();
+  
+  if (
+    id.includes("vision") || 
+    id.includes("vl") || 
+    id.includes("multimodal") || 
+    id.includes("clip") || 
+    id.includes("siglip") || 
+    id.includes("llava") || 
+    id.includes("paligemma") || 
+    id.includes("internvl") || 
+    id.includes("qwen-vl") || 
+    id.includes("minicpm-v") || 
+    id.includes("cogvlm") || 
+    id.includes("aria") || 
+    id.includes("pixtral")
+  ) {
+    return { label: "视觉 | Vision", bgClass: "bg-purple-100 text-purple-800 border-purple-200", textClass: "text-purple-600" };
+  }
+  
+  if (
+    id.includes("whisper") || 
+    id.includes("audio") || 
+    id.includes("voice") || 
+    id.includes("tts") || 
+    id.includes("stt") || 
+    id.includes("music") || 
+    id.includes("speech") || 
+    id.includes("bark") || 
+    id.includes("cosyvoice") || 
+    id.includes("sensevoice") || 
+    id.includes("f5-tts")
+  ) {
+    return { label: "音频 | Audio", bgClass: "bg-amber-100 text-amber-800 border-amber-200", textClass: "text-amber-600" };
+  }
+  
+  if (
+    id.includes("flux") || 
+    id.includes("stable-diffusion") || 
+    id.includes("diffusion") || 
+    id.includes("sdxl") || 
+    id.includes("sd3") || 
+    id.includes("kolors") || 
+    id.includes("midjourney") || 
+    id.includes("dall-e") || 
+    id.includes("imagen")
+  ) {
+    return { label: "生图 | Image", bgClass: "bg-pink-100 text-pink-800 border-pink-200", textClass: "text-pink-600" };
+  }
+  
+  if (
+    id.includes("embedding") || 
+    id.includes("bge-") || 
+    id.includes("nomic-embed") || 
+    id.includes("text-embedding") || 
+    id.includes("gte-")
+  ) {
+    return { label: "向量 | Embedding", bgClass: "bg-cyan-100 text-cyan-800 border-cyan-200", textClass: "text-cyan-600" };
+  }
+  
+  if (
+    id.includes("rerank") || 
+    id.includes("bge-reranker") || 
+    id.includes("gte-reranker")
+  ) {
+    return { label: "重排 | Reranker", bgClass: "bg-teal-100 text-teal-800 border-teal-200", textClass: "text-teal-600" };
+  }
+  
+  return { label: "文本 | Text", bgClass: "bg-emerald-100 text-emerald-800 border-emerald-200", textClass: "text-emerald-600" };
+};
+
 export default function App() {
   const [config, setConfig] = useState<NimConfig>({ 
     keys: [], 
@@ -416,7 +488,7 @@ export default function App() {
                 <Activity className="text-[#E4E3E0] w-6 h-6" />
               </div>
               <div>
-                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.3.2</span></h1>
+                <h1 className="font-serif italic text-2xl tracking-tight">NVIDIA NIM 负载均衡器 <span className="text-xs opacity-50 not-italic ml-1">v1.4.0</span></h1>
                 <p className="font-mono text-[10px] uppercase opacity-50 tracking-widest leading-none">高可用代理接口</p>
               </div>
             </div>
@@ -816,10 +888,14 @@ export default function App() {
                             const detail = key.modelDetails?.[modelId];
                             const ctxLen = detail?.contextLength;
                             const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : null;
+                            const modelType = detectModelType(modelId);
                             return (
-                              <span key={modelId} className="px-1.5 py-0.5 bg-[#F5F5F5] border border-[#141414]/10 rounded select-all flex items-center gap-1">
-                                {modelId}
+                              <span key={modelId} className="px-1.5 py-0.5 bg-[#F5F5F5] border border-[#141414]/10 rounded select-all flex items-center gap-1.5 text-[11px]">
+                                <span className="truncate">{modelId}</span>
                                 {ctx && <span className="opacity-40 text-[8px] bg-black/5 px-1 rounded">{ctx}</span>}
+                                <span className={`text-[8px] leading-none px-1 py-0.5 rounded border ${modelType.bgClass}`}>
+                                  {modelType.label.split(" | ")[0]}
+                                </span>
                               </span>
                             );
                           })}
@@ -840,14 +916,18 @@ export default function App() {
                     const sampleKey = keysForModel.find(k => k.modelDetails?.[modelId]?.contextLength);
                     const ctxLen = sampleKey?.modelDetails?.[modelId]?.contextLength;
                     const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : null;
+                    const modelType = detectModelType(modelId);
 
                     return (
                       <div key={modelId} className="bg-white border border-[#141414] shadow-[4px_4px_0px_0px_#141414] overflow-hidden">
                         <div className="bg-[#141414] text-[#E4E3E0] p-2 px-4 flex justify-between items-center text-[10px] uppercase font-mono tracking-widest">
-                          <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
                             <span className="bg-white/20 px-2 py-0.5 rounded text-white flex items-center gap-2">
                               模型: {modelId}
                               {ctx && <span className="bg-white/10 px-1 rounded text-[8px]">{ctx} CTX</span>}
+                            </span>
+                            <span className="bg-white/10 px-2 py-0.5 rounded border border-white/20 text-white text-[8px] tracking-normal font-sans">
+                              {modelType.label}
                             </span>
                             <span className="opacity-50">{keysForModel.length} 个端点支持</span>
                           </div>
@@ -1034,6 +1114,9 @@ export default function App() {
                                 }}
                               />
                               <span className="truncate flex-1">{model}</span>
+                              <span className={`text-[7px] leading-none px-1 py-0.5 rounded border ${detectModelType(model).bgClass}`}>
+                                {detectModelType(model).label.split(" | ")[0]}
+                              </span>
                               {formModelDetails[model]?.contextLength && (
                                 <span className="opacity-40 text-[7px] bg-black/5 px-1 rounded shrink-0">
                                   {(formModelDetails[model].contextLength! >= 1024 * 1024 ? `${(formModelDetails[model].contextLength! / (1024 * 1024)).toFixed(0)}M` : formModelDetails[model].contextLength! >= 1024 ? `${(formModelDetails[model].contextLength! / 1024).toFixed(0)}K` : formModelDetails[model].contextLength!.toString())}
@@ -1101,7 +1184,7 @@ export default function App() {
             <span className="font-mono text-[10px] uppercase tracking-widest leading-none">系统状态：运行中</span>
           </div>
           <p className="font-serif italic text-sm opacity-60">
-            NVIDIA NIM 负载均衡器 v1.3.2。专为关键任务部署设计。
+            NVIDIA NIM 负载均衡器 v1.4.0。专为关键任务部署设计。
           </p>
         </div>
         <div className="flex items-center gap-8 font-mono text-[10px] uppercase opacity-40">

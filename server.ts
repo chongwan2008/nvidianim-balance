@@ -471,6 +471,117 @@ const selectKey = (model?: string): NimKey | null => {
   }
 };
 
+const detectModelType = (modelId: string): string => {
+  const id = modelId.toLowerCase();
+  if (
+    id.includes("vision") || 
+    id.includes("vl") || 
+    id.includes("multimodal") || 
+    id.includes("clip") || 
+    id.includes("siglip") || 
+    id.includes("llava") || 
+    id.includes("paligemma") || 
+    id.includes("internvl") || 
+    id.includes("qwen-vl") || 
+    id.includes("minicpm-v") || 
+    id.includes("cogvlm") || 
+    id.includes("aria") || 
+    id.includes("pixtral")
+  ) {
+    return "Vision";
+  }
+  if (
+    id.includes("whisper") || 
+    id.includes("audio") || 
+    id.includes("voice") || 
+    id.includes("tts") || 
+    id.includes("stt") || 
+    id.includes("music") || 
+    id.includes("speech") || 
+    id.includes("bark") || 
+    id.includes("cosyvoice") || 
+    id.includes("sensevoice") || 
+    id.includes("f5-tts")
+  ) {
+    return "Audio";
+  }
+  if (
+    id.includes("flux") || 
+    id.includes("stable-diffusion") || 
+    id.includes("diffusion") || 
+    id.includes("sdxl") || 
+    id.includes("sd3") || 
+    id.includes("kolors") || 
+    id.includes("midjourney") || 
+    id.includes("dall-e") || 
+    id.includes("imagen")
+  ) {
+    return "Image";
+  }
+  if (
+    id.includes("embedding") || 
+    id.includes("bge-") || 
+    id.includes("nomic-embed") || 
+    id.includes("text-embedding") || 
+    id.includes("gte-")
+  ) {
+    return "Embedding";
+  }
+  if (
+    id.includes("rerank") || 
+    id.includes("bge-reranker") || 
+    id.includes("gte-reranker")
+  ) {
+    return "Reranker";
+  }
+  return "Text";
+};
+
+const handlePublicModelsQuery = (req: express.Request, res: express.Response) => {
+  if (config.settings.masterKey) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || authHeader !== `Bearer ${config.settings.masterKey}`) {
+      return res.status(401).json({ error: "Unauthorized: Invalid or missing Balancer Master Key." });
+    }
+  }
+
+  const activeKeys = config.keys.filter(k => k.enabled && k.status !== "circuit-broken" && k.status !== "error");
+  const uniqueModels = new Map<string, { id: string; owned_by: string; context_length?: number; model_type?: string }>();
+
+  for (const key of activeKeys) {
+    const models = key.confirmedModels || [];
+    for (const modelId of models) {
+      if (!uniqueModels.has(modelId)) {
+        const details = key.modelDetails?.[modelId];
+        uniqueModels.set(modelId, {
+          id: modelId,
+          owned_by: details?.ownedBy || "system",
+          context_length: details?.contextLength || detectContextLength(modelId),
+          model_type: detectModelType(modelId)
+        });
+      }
+    }
+  }
+
+  const dataList = Array.from(uniqueModels.values()).map(m => ({
+    id: m.id,
+    object: "model",
+    created: Math.floor(Date.now() / 1000) - 3600,
+    owned_by: m.owned_by,
+    context_length: m.context_length,
+    model_type: m.model_type
+  }));
+
+  res.json({
+    object: "list",
+    data: dataList
+  });
+};
+
+app.get("/v1/models", handlePublicModelsQuery);
+app.get("/nim-proxy/v1/models", handlePublicModelsQuery);
+app.get("/nim-proxy/models", handlePublicModelsQuery);
+
 // The Proxy Endpoint
 app.all("/nim-proxy/*", async (req, res) => {
   // Auth check for the balancer itself
