@@ -258,7 +258,7 @@ async function fetchModelsForProvider(provider: string, endpoint: string, key: s
   const prov = (provider || "openai").toLowerCase();
   if (prov === "gemini") {
     const targetUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
-    const response = await fetch(targetUrl);
+    const response = await fetch(targetUrl, { signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error(`Google Gemini API error: ${response.statusText}`);
     const data = await response.json() as any;
     if (data.models) {
@@ -278,6 +278,7 @@ async function fetchModelsForProvider(provider: string, endpoint: string, key: s
     return { data: [] };
   } else if (prov === "claude") {
     const claudeModels = [
+      { id: "claude-3-7-sonnet-latest", object: "model", owned_by: "anthropic", contextLength: 200000 },
       { id: "claude-3-5-sonnet-latest", object: "model", owned_by: "anthropic", contextLength: 200000 },
       { id: "claude-3-5-haiku-latest", object: "model", owned_by: "anthropic", contextLength: 200000 },
       { id: "claude-3-opus-latest", object: "model", owned_by: "anthropic", contextLength: 200000 },
@@ -293,13 +294,57 @@ async function fetchModelsForProvider(provider: string, endpoint: string, key: s
     ];
     return { data: antigravityModels };
   } else {
-    const targetEndpoint = endpoint.replace(/\/$/, "");
-    const response = await fetch(`${targetEndpoint}/models`, {
-      headers: { "Authorization": `Bearer ${key}` },
-    });
-    if (!response.ok) throw new Error(`API responded with error ${response.status}`);
+    const targetEndpoint = (endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
+    let response: Response | null = null;
+    let url = `${targetEndpoint}/models`;
+    try {
+      response = await fetch(url, {
+        headers: { "Authorization": `Bearer ${key}` },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!response.ok && !targetEndpoint.endsWith("/v1")) {
+        url = `${targetEndpoint}/v1/models`;
+        response = await fetch(url, {
+          headers: { "Authorization": `Bearer ${key}` },
+          signal: AbortSignal.timeout(10000)
+        });
+      }
+    } catch (err) {
+      if (!targetEndpoint.endsWith("/v1")) {
+        url = `${targetEndpoint}/v1/models`;
+        response = await fetch(url, {
+          headers: { "Authorization": `Bearer ${key}` },
+          signal: AbortSignal.timeout(10000)
+        });
+      } else {
+        throw err;
+      }
+    }
+    if (!response || !response.ok) {
+      throw new Error(`API responded with error ${response?.status || 500}`);
+    }
     const data = await response.json() as any;
-    return data;
+    let rawList: any[] = [];
+    if (Array.isArray(data)) {
+      rawList = data;
+    } else if (Array.isArray(data.data)) {
+      rawList = data.data;
+    } else if (Array.isArray(data.models)) {
+      rawList = data.models;
+    }
+    const formatted = rawList.map((m: any) => {
+      if (typeof m === "string") {
+        return { id: m, object: "model", owned_by: "system", contextLength: detectContextLength(m) };
+      }
+      const modelId = m.id || m.name || m.model || "";
+      return {
+        id: modelId,
+        object: "model",
+        owned_by: m.owned_by || m.owner || "system",
+        contextLength: m.context_length || m.contextLength || detectContextLength(modelId)
+      };
+    }).filter((m: any) => Boolean(m.id));
+    return { data: formatted };
   }
 }
 
@@ -453,46 +498,33 @@ app.patch("/api/settings", (req, res) => {
 async function runHealthCheck() {
   console.log("Running proactive health check for all keys...");
   const checks = config.keys.filter(k => k.enabled).map(async (key) => {
-    const endpoint = (key.endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
     try {
-      const response = await fetch(`${endpoint}/models`, {
-        headers: { "Authorization": `Bearer ${key.key}` },
-        signal: AbortSignal.timeout(10000) // 10s timeout
-      });
-      
+      const data = await fetchModelsForProvider(key.provider || "openai", key.endpoint || "", key.key);
       key.lastHealthCheck = new Date().toISOString();
 
-      if (response.ok) {
-        const body = await response.json();
-        if (body.data) {
-          if (!key.modelDetails) key.modelDetails = {};
-          const uniqueModelIds = new Set<string>();
-          body.data.forEach((m: any) => {
-            if (m && m.id && !uniqueModelIds.has(m.id)) {
-              uniqueModelIds.add(m.id);
-              key.modelDetails![m.id] = {
-                id: m.id,
-                contextLength: detectContextLength(m.id),
-                ownedBy: m.owned_by
-              };
-            }
-          });
-          key.confirmedModels = Array.from(uniqueModelIds);
-        }
-        
-        if (key.status !== "active") {
-          console.log(`Key ${key.id} (${key.name}) is now ACTIVE.`);
-        }
+      if (data && data.data && Array.isArray(data.data) && data.data.length > 0) {
+        if (!key.modelDetails) key.modelDetails = {};
+        const uniqueModelIds = new Set<string>();
+        data.data.forEach((m: any) => {
+          if (m && m.id && !uniqueModelIds.has(m.id)) {
+            uniqueModelIds.add(m.id);
+            key.modelDetails![m.id] = {
+              id: m.id,
+              contextLength: m.contextLength || detectContextLength(m.id),
+              ownedBy: m.owned_by || "system"
+            };
+          }
+        });
+        key.confirmedModels = Array.from(uniqueModelIds);
         key.status = "active";
         key.consecutiveFailures = 0;
+        key.cooldownUntil = undefined;
       } else {
-        key.consecutiveFailures = (key.consecutiveFailures || 0) + 1;
-        if (key.consecutiveFailures >= config.settings.circuitBreakerThreshold) {
-          if (key.status !== "error") console.log(`Key ${key.id} marked as ERROR due to health check failure.`);
-          key.status = "error";
-        }
+        key.status = "active";
+        key.consecutiveFailures = 0;
       }
-    } catch (error) {
+    } catch (error: any) {
+      console.warn(`Health check warning for key ${key.name} (${key.id}):`, error?.message || error);
       key.consecutiveFailures = (key.consecutiveFailures || 0) + 1;
       if (key.consecutiveFailures >= config.settings.circuitBreakerThreshold) {
         key.status = "error";
@@ -506,7 +538,7 @@ async function runHealthCheck() {
 
 app.post("/api/health-check/run", async (req, res) => {
   await runHealthCheck();
-  res.json({ success: true, keys: config.keys.map(k => ({ id: k.id, status: k.status })) });
+  res.json({ success: true, keys: config.keys.map(k => ({ id: k.id, status: k.status, confirmedModels: k.confirmedModels })) });
 });
 
 let healthCheckTimer: NodeJS.Timeout | null = null;
@@ -582,12 +614,12 @@ const translateCliModel = (modelId?: string, poolModels: string[] = []): string 
   
   const original = modelId.toLowerCase();
   
-  // 1. Direct match: If original is in the pool, use it directly!
+  // 1. Direct match: If original is in the pool, use it directly with exact casing!
   const directMatch = poolModels.find(m => m.toLowerCase() === original);
   if (directMatch) return directMatch;
 
-  // 2. CODEX CLI: Translate coding requests
-  if (original.includes("codex") || original.includes("code-davinci") || original.includes("coder") || original.includes("code-")) {
+  // 2. CODEX CLI: Translate legacy coding assistant requests
+  if (original.includes("code-davinci") || original.includes("copilot-cli")) {
     const coderModel = poolModels.find(m => {
       const lm = m.toLowerCase();
       return lm.includes("coder") || lm.includes("code") || lm.includes("deepseek-chat") || lm.includes("gpt-4");
@@ -595,20 +627,14 @@ const translateCliModel = (modelId?: string, poolModels: string[] = []): string 
     if (coderModel) return coderModel;
   }
 
-  // 3. GEMINI CLI: Translate Google Gemini CLI models
-  if (original.includes("gemini") || original.includes("gemini-cli") || original.includes("google-")) {
+  // 3. GEMINI CLI: Translate Google Gemini CLI synthetic aliases
+  if (original === "gemini-cli" || original === "gemini-agent") {
     const geminiModel = poolModels.find(m => m.toLowerCase().includes("gemini"));
     if (geminiModel) return geminiModel;
-    
-    const fastChatModel = poolModels.find(m => {
-      const lm = m.toLowerCase();
-      return lm.includes("gpt-4o") || lm.includes("deepseek") || lm.includes("llama");
-    });
-    if (fastChatModel) return fastChatModel;
   }
 
-  // 4. ANTIGRAVITY CLI: Translate antigravity systems or agent frameworks
-  if (original.includes("antigravity") || original.includes("antigravity-cli") || original.includes("agent")) {
+  // 4. ANTIGRAVITY CLI: Translate antigravity synthetic aliases
+  if (original === "antigravity-cli" || original === "agent-executor") {
     const agentModel = poolModels.find(m => {
       const lm = m.toLowerCase();
       return lm.includes("deepseek") || lm.includes("gpt-4") || lm.includes("claude");
@@ -616,19 +642,18 @@ const translateCliModel = (modelId?: string, poolModels: string[] = []): string 
     if (agentModel) return agentModel;
   }
 
-  // 5. General prefix cleanups (e.g. gpt-4, deepseek, claude, llama, qwen)
-  for (const brand of ["deepseek", "gpt-4", "claude", "llama", "qwen", "mistral", "gemini"]) {
-    if (original.includes(brand)) {
-      const brandModel = poolModels.find(m => m.toLowerCase().includes(brand));
-      if (brandModel) return brandModel;
-    }
-  }
+  // 5. If original model is not in pool, but pool has a model whose name ends with this model ID (e.g. meta/llama-3.3-70b-instruct vs llama-3.3-70b-instruct)
+  const suffixMatch = poolModels.find(m => {
+    const lm = m.toLowerCase();
+    return lm.endsWith(`/${original}`) || original.endsWith(`/${lm}`);
+  });
+  if (suffixMatch) return suffixMatch;
 
-  // 6. If no matches, fall back to any available model in the key's pool!
-  return poolModels[0] || modelId;
+  // 6. Otherwise preserve the user's requested model name untouched!
+  return modelId;
 };
 
-// Selection Logic
+// Selection Logic: High accuracy model-aware routing
 const selectKey = (model?: string, excludeIds: Set<string> = new Set()): NimKey | null => {
   let candidates = config.keys.filter(k => k.enabled && k.status !== "circuit-broken" && !excludeIds.has(k.id));
 
@@ -646,13 +671,42 @@ const selectKey = (model?: string, excludeIds: Set<string> = new Set()): NimKey 
     return true;
   });
 
-  // Smart Routing: Filter by model if key has filters
+  if (candidates.length === 0) return null;
+
+  // Smart Routing: Match key by requested model accurately
   if (model) {
-    const modelSpecific = candidates.filter(k => k.modelFilters && k.modelFilters.includes(model));
-    if (modelSpecific.length > 0) candidates = modelSpecific;
-    else {
-      // If no specific keys for this model, use keys without any filters
-      candidates = candidates.filter(k => !k.modelFilters || k.modelFilters.length === 0);
+    const reqModelLower = model.toLowerCase();
+
+    // Priority 1: Key with explicit model whitelist filter containing model
+    const explicitFilterKeys = candidates.filter(k => k.modelFilters && k.modelFilters.some(m => m.toLowerCase() === reqModelLower));
+    if (explicitFilterKeys.length > 0) {
+      candidates = explicitFilterKeys;
+    } else {
+      // Priority 2: Key with confirmedModels containing exact or normalized model
+      const confirmedMatchKeys = candidates.filter(k => {
+        if (!k.confirmedModels || k.confirmedModels.length === 0) return false;
+        return k.confirmedModels.some(m => {
+          const ml = m.toLowerCase();
+          return ml === reqModelLower || ml.endsWith(`/${reqModelLower}`) || reqModelLower.endsWith(`/${ml}`);
+        });
+      });
+
+      if (confirmedMatchKeys.length > 0) {
+        candidates = confirmedMatchKeys;
+      } else {
+        // Priority 3: Provider / Brand specific routing
+        if (reqModelLower.startsWith("gemini") || reqModelLower.startsWith("google")) {
+          const geminiKeys = candidates.filter(k => (k.provider || "").toLowerCase() === "gemini");
+          if (geminiKeys.length > 0) candidates = geminiKeys;
+        } else if (reqModelLower.startsWith("claude") || reqModelLower.startsWith("anthropic")) {
+          const claudeKeys = candidates.filter(k => (k.provider || "").toLowerCase() === "claude");
+          if (claudeKeys.length > 0) candidates = claudeKeys;
+        } else {
+          // Priority 4: Candidates without restrictive modelFilters (or unprobed keys)
+          const generalKeys = candidates.filter(k => !k.modelFilters || k.modelFilters.length === 0);
+          if (generalKeys.length > 0) candidates = generalKeys;
+        }
+      }
     }
   }
 
@@ -978,7 +1032,9 @@ async function handleNativeTranslationRequest(
 
       const baseUrl = (key.endpoint || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
       const targetMethod = isStream ? "streamGenerateContent?alt=sse" : "generateContent";
-      const targetUrl = `${baseUrl}/v1beta/models/${geminiModel}:${targetMethod}&key=${key.key}`;
+      const targetUrl = isStream 
+        ? `${baseUrl}/v1beta/models/${geminiModel}:${targetMethod}&key=${key.key}`
+        : `${baseUrl}/v1beta/models/${geminiModel}:${targetMethod}?key=${key.key}`;
 
       const response = await fetch(targetUrl, {
         method: "POST",
@@ -1102,11 +1158,32 @@ async function handleNativeTranslationRequest(
   }
 }
 
+// OpenAI Protocol Compliant Error Helper
+const sendOpenAiError = (
+  res: express.Response,
+  status: number,
+  message: string,
+  type: string = "invalid_request_error",
+  code: string = ""
+) => {
+  return res.status(status).json({
+    error: {
+      message,
+      type,
+      param: null,
+      code: code || (status === 401 ? "invalid_api_key" : status === 429 ? "rate_limit_exceeded" : status === 404 ? "model_not_found" : status >= 500 ? "server_error" : "invalid_request_error")
+    }
+  });
+};
+
 const handlePublicModelsQuery = (req: express.Request, res: express.Response) => {
   if (config.settings.masterKey) {
     const authHeader = req.headers.authorization;
-    if (!authHeader || authHeader !== `Bearer ${config.settings.masterKey}`) {
-      return res.status(401).json({ error: "Unauthorized: Invalid or missing Balancer Master Key." });
+    const apiKeyHeader = req.headers["api-key"] as string | undefined;
+    const validBearer = authHeader === `Bearer ${config.settings.masterKey}`;
+    const validApiKey = apiKeyHeader === config.settings.masterKey;
+    if (!validBearer && !validApiKey) {
+      return sendOpenAiError(res, 401, "Incorrect API key provided or missing Balancer Master Key.", "invalid_request_error", "invalid_api_key");
     }
   }
 
@@ -1123,7 +1200,7 @@ const handlePublicModelsQuery = (req: express.Request, res: express.Response) =>
         const details = key.modelDetails?.[modelId];
         uniqueModels.set(modelId, {
           id: modelId,
-          owned_by: details?.ownedBy || "system",
+          owned_by: details?.ownedBy || (key.provider === "gemini" ? "google" : key.provider === "claude" ? "anthropic" : "system"),
           context_length: details?.contextLength || detectContextLength(modelId),
           model_type: detectModelType(modelId)
         });
@@ -1136,6 +1213,24 @@ const handlePublicModelsQuery = (req: express.Request, res: express.Response) =>
     object: "model",
     created: Math.floor(Date.now() / 1000) - 3600,
     owned_by: m.owned_by,
+    permission: [
+      {
+        id: `modelperm-${m.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
+        object: "model_permission",
+        created: Math.floor(Date.now() / 1000) - 3600,
+        allow_create_engine: false,
+        allow_sampling: true,
+        allow_logprobs: true,
+        allow_search_indices: false,
+        allow_view: true,
+        allow_fine_tuning: false,
+        organization: "*",
+        group: null,
+        is_blocking: false
+      }
+    ],
+    root: m.id,
+    parent: null,
     context_length: m.context_length,
     model_type: m.model_type
   }));
@@ -1146,16 +1241,46 @@ const handlePublicModelsQuery = (req: express.Request, res: express.Response) =>
   });
 };
 
+const handleSingleModelQuery = (req: express.Request, res: express.Response) => {
+  const modelId = req.params.modelId || req.params[0];
+  if (!modelId) {
+    return sendOpenAiError(res, 400, "Model ID is required.", "invalid_request_error");
+  }
+
+  const activeKeys = config.keys.filter(k => k.enabled && k.status !== "circuit-broken" && k.status !== "error");
+  for (const key of activeKeys) {
+    const models = key.confirmedModels || [];
+    const match = models.find(m => m.toLowerCase() === modelId.toLowerCase());
+    if (match) {
+      const details = key.modelDetails?.[match];
+      return res.json({
+        id: match,
+        object: "model",
+        created: Math.floor(Date.now() / 1000) - 3600,
+        owned_by: details?.ownedBy || (key.provider === "gemini" ? "google" : key.provider === "claude" ? "anthropic" : "system"),
+        context_length: details?.contextLength || detectContextLength(match),
+        model_type: detectModelType(match)
+      });
+    }
+  }
+
+  return sendOpenAiError(res, 404, `The model '${modelId}' does not exist or is not registered in active keys.`, "invalid_request_error", "model_not_found");
+};
+
 app.get("/v1/models", handlePublicModelsQuery);
+app.get("/models", handlePublicModelsQuery);
 app.get("/nim-proxy/v1/models", handlePublicModelsQuery);
 app.get("/nim-proxy/models", handlePublicModelsQuery);
+app.get("/v1/models/:modelId", handleSingleModelQuery);
+app.get("/models/:modelId", handleSingleModelQuery);
 
-// The Proxy Endpoint (Supports standard OpenAI v1 path and multi-tenant proxy path)
-app.all(["/nim-proxy/*", "/v1/*"], async (req, res) => {
+// The OpenAI Standard Proxy Endpoint Handler
+const handleOpenAiProxy = async (req: express.Request, res: express.Response) => {
   const startTime = Date.now();
 
   // Detect CLI OAuth and intercept token configurations styled like cloud-native developer environments
   const authHeader = req.headers.authorization || "";
+  const apiKeyHeader = req.headers["api-key"] as string | undefined;
   const token = authHeader.replace(/^Bearer\s+/i, "");
   let oauthProfile = "";
 
@@ -1171,7 +1296,7 @@ app.all(["/nim-proxy/*", "/v1/*"], async (req, res) => {
   let isAuthorized = false;
   if (!config.settings.masterKey) {
     isAuthorized = true;
-  } else if (authHeader === `Bearer ${config.settings.masterKey}`) {
+  } else if (authHeader === `Bearer ${config.settings.masterKey}` || apiKeyHeader === config.settings.masterKey) {
     isAuthorized = true;
   } else if (oauthProfile) {
     // Automatically authorize recognized CLI OAuth token contexts
@@ -1180,20 +1305,27 @@ app.all(["/nim-proxy/*", "/v1/*"], async (req, res) => {
   }
 
   if (!isAuthorized) {
-    return res.status(401).json({ error: "Unauthorized: Invalid or missing Balancer Master Key or recognized OAuth token context." });
+    return sendOpenAiError(res, 401, "Incorrect API key provided or missing Balancer Master Key.", "invalid_request_error", "invalid_api_key");
   }
 
   const incomingModel = req.body?.model;
   const activePoolModels = getAllActiveModels();
-  // Dynamic Model Translation: Translate codex, gemini-cli, antigravity-cli custom identifiers globally first
+  // Dynamic Model Translation: Translate CLI synthetic aliases if necessary
   const model = translateCliModel(incomingModel, activePoolModels);
   
   if (!checkRateLimit()) {
-    return res.status(429).json({ error: "Global rate limit exceeded." });
+    return sendOpenAiError(res, 429, "Global rate limit exceeded (QPS threshold reached).", "rate_limit_error", "rate_limit_exceeded");
   }
 
-  // Normalize subPath: make sure it translates to a clean downstream v1 path
-  let subPath = req.params[0] || "";
+  // Normalize subPath: make sure it translates to a clean downstream OpenAI path
+  let pathOnly = req.path || "";
+  if (pathOnly.startsWith("/nim-proxy")) {
+    pathOnly = pathOnly.replace(/^\/nim-proxy\/?/, "");
+  }
+  if (pathOnly.startsWith("/")) {
+    pathOnly = pathOnly.slice(1);
+  }
+  let subPath = pathOnly;
   if (!subPath.startsWith("v1/") && !subPath.startsWith("v1beta/")) {
     subPath = "v1/" + subPath;
   }
@@ -1206,11 +1338,21 @@ app.all(["/nim-proxy/*", "/v1/*"], async (req, res) => {
     const selectedKey = selectKey(model, triedKeyIds);
     if (!selectedKey) {
       if (triedKeyIds.size > 0) {
-        return res.status(503).json({
-          error: `All active endpoint nodes failed or returned errors. Tested: ${[...triedKeyIds].map(id => config.keys.find(k => k.id === id)?.name || id).join(", ")}`
-        });
+        return sendOpenAiError(
+          res, 
+          503, 
+          `All active endpoint nodes failed or returned errors. Tested: ${[...triedKeyIds].map(id => config.keys.find(k => k.id === id)?.name || id).join(", ")}`,
+          "server_error",
+          "all_nodes_failed"
+        );
       }
-      return res.status(503).json({ error: "No available API Key nodes. 没有可用的活跃节点以路由此请求（所有端点可能都在熔断状态，或者配额被用尽）。" });
+      return sendOpenAiError(
+        res,
+        503,
+        `No available API Key nodes for model '${model || incomingModel || "default"}'. All matching endpoints may be circuit-broken, rate-limited, or out of quota.`,
+        "server_error",
+        "no_active_nodes"
+      );
     }
 
     triedKeyIds.add(selectedKey.id);
@@ -1480,7 +1622,125 @@ app.all(["/nim-proxy/*", "/v1/*"], async (req, res) => {
   }
 
   // If we exhaust attempts
-  res.status(502).json({ error: "Failed to proxy request. All matching API key-nodes were tried and failed. 所有可能匹配的 API 节点在此次路由中均发生故障。" });
+  return sendOpenAiError(
+    res,
+    502,
+    "Failed to proxy request. All matching API key-nodes were tried and returned errors. 所有可能匹配的 API 节点在此次路由中均发生故障。",
+    "server_error",
+    "upstream_failure"
+  );
+};
+
+// Register all standard OpenAI endpoints & legacy routes
+const openAiProxyRoutes = [
+  "/v1/chat/completions",
+  "/chat/completions",
+  "/v1/completions",
+  "/completions",
+  "/v1/embeddings",
+  "/embeddings",
+  "/v1/images/*",
+  "/images/*",
+  "/v1/audio/*",
+  "/audio/*",
+  "/v1/moderations",
+  "/moderations",
+  "/nim-proxy/*",
+  "/v1/*"
+];
+
+app.all(openAiProxyRoutes, handleOpenAiProxy);
+
+// Test a specific model on a key or across pool
+app.post("/api/test-model", async (req, res) => {
+  const { modelId, keyId } = req.body;
+  if (!modelId) return res.status(400).json({ success: false, error: "缺少模型名称 modelId" });
+
+  const targetKey = keyId ? config.keys.find(k => k.id === keyId) : selectKey(modelId);
+  if (!targetKey) {
+    return res.status(404).json({ success: false, error: `没有可用于测试模型 '${modelId}' 的已启用密钥节点` });
+  }
+
+  const startTime = Date.now();
+  const providerLower = (targetKey.provider || "openai").toLowerCase();
+
+  try {
+    if (providerLower === "gemini") {
+      const baseUrl = (targetKey.endpoint || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
+      const targetUrl = `${baseUrl}/v1beta/models/${modelId}:generateContent?key=${targetKey.key}`;
+      const response = await fetch(targetUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: "hi" }] }],
+          generationConfig: { maxOutputTokens: 10 }
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+      const latency = Date.now() - startTime;
+      if (!response.ok) {
+        const text = await response.text();
+        return res.json({ success: false, status: response.status, latency, error: text.slice(0, 300) });
+      }
+      const data = await response.json() as any;
+      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "OK";
+      return res.json({ success: true, status: 200, latency, reply: reply.trim(), keyName: targetKey.name });
+    } else if (providerLower === "claude") {
+      const targetUrl = `${(targetKey.endpoint || "https://api.anthropic.com").replace(/\/$/, "")}/v1/messages`;
+      const response = await fetch(targetUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": targetKey.key,
+          "anthropic-version": "2023-06-01"
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 10
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+      const latency = Date.now() - startTime;
+      if (!response.ok) {
+        const text = await response.text();
+        return res.json({ success: false, status: response.status, latency, error: text.slice(0, 300) });
+      }
+      const data = await response.json() as any;
+      const reply = data.content?.[0]?.text || "OK";
+      return res.json({ success: true, status: 200, latency, reply: reply.trim(), keyName: targetKey.name });
+    } else {
+      const endpoint = (targetKey.endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
+      const targetUrl = endpoint.endsWith("/v1") || endpoint.endsWith("/openai")
+        ? `${endpoint}/chat/completions`
+        : `${endpoint}/v1/chat/completions`;
+
+      const response = await fetch(targetUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${targetKey.key}`
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 10
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+      const latency = Date.now() - startTime;
+      if (!response.ok) {
+        const text = await response.text();
+        return res.json({ success: false, status: response.status, latency, error: text.slice(0, 300) });
+      }
+      const data = await response.json() as any;
+      const reply = data.choices?.[0]?.message?.content || "OK";
+      return res.json({ success: true, status: 200, latency, reply: reply.trim(), keyName: targetKey.name });
+    }
+  } catch (err: any) {
+    const latency = Date.now() - startTime;
+    return res.json({ success: false, status: 500, latency, error: err?.message || "请求超时或网络异常" });
+  }
 });
 
 // Health check

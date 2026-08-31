@@ -122,6 +122,23 @@ const detectModelType = (modelId: string): { label: string; bgClass: string; tex
   return { label: "文本 | Text", bgClass: "bg-emerald-100 text-emerald-800 border-emerald-200", textClass: "text-emerald-600" };
 };
 
+export const formatDateTime = (isoString?: string) => {
+  if (!isoString) return '--';
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return isoString;
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const mins = String(d.getMinutes()).padStart(2, '0');
+    const secs = String(d.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${mins}:${secs}`;
+  } catch {
+    return isoString;
+  }
+};
+
 export const getLatencyForProviderModel = (key: NimKey, modelId: string, logs: any[]) => {
   // 1. Check if there are real logs for this model and this keyId
   const modelLogs = (logs || []).filter(l => l.model === modelId && l.keyId === key.id && l.status === 200 && typeof l.duration === 'number');
@@ -357,6 +374,39 @@ export default function App() {
       setPlaygroundModel(allModels[0]);
     }
   }, [viewMode, allModels, playgroundModel]);
+
+  const [testingModel, setTestingModel] = useState<string | null>(null);
+  const [modelTestResults, setModelTestResults] = useState<Record<string, { success: boolean; latency: number; status: number; reply?: string; error?: string; keyName?: string }>>({});
+  const [refreshingAllModels, setRefreshingAllModels] = useState<boolean>(false);
+
+  const runTestForModel = async (modelId: string, keyId?: string) => {
+    setTestingModel(modelId);
+    try {
+      const res = await fetch("/api/test-model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelId, keyId })
+      });
+      const result = await res.json();
+      setModelTestResults(prev => ({ ...prev, [modelId]: result }));
+    } catch (err: any) {
+      setModelTestResults(prev => ({ ...prev, [modelId]: { success: false, latency: 0, status: 500, error: err?.message || "测试失败" } }));
+    } finally {
+      setTestingModel(null);
+    }
+  };
+
+  const handleRefreshAllModels = async () => {
+    setRefreshingAllModels(true);
+    try {
+      await fetch("/api/health-check/run", { method: "POST" });
+      await fetchConfig();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRefreshingAllModels(false);
+    }
+  };
 
   const handleVisionImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1693,9 +1743,9 @@ export default function App() {
                           <div className="space-y-2">
                             {key.lastLogs.map((log, idx) => (
                               <div key={idx} className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-150 py-1 last:border-0 ${log.status >= 400 ? 'text-rose-600' : ''}`}>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
                                   <span className={log.status >= 400 ? 'text-rose-600 font-bold' : 'text-emerald-600'}>[{log.status}]</span>
-                                  <span className="opacity-70">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                  <span className="opacity-70">{formatDateTime(log.timestamp)}</span>
                                   <span className="bg-slate-200/80 px-1 rounded text-slate-800 truncate max-w-[150px]">{log.model}</span>
                                   {log.status >= 400 && (
                                     <span className="font-bold text-[8px] border border-rose-400 px-1 rounded">
@@ -1786,14 +1836,24 @@ export default function App() {
                         } 个独立可用模型）
                       </p>
                     </div>
-                    <div className="w-full sm:w-72 relative font-sans">
-                      <input
-                        type="search"
-                        placeholder="关键字模糊检索大模型 (如 qwen, deepseek)..."
-                        value={modelsSearch}
-                        onChange={(e) => setModelsSearch(e.target.value)}
-                        className="w-full border border-slate-250 focus:border-slate-450 p-2.5 pl-3.5 text-xs font-mono focus:ring-0 focus:outline-none bg-slate-50 rounded-xl font-semibold"
-                      />
+                    <div className="flex items-center gap-3 w-full sm:w-auto">
+                      <button
+                        onClick={handleRefreshAllModels}
+                        disabled={refreshingAllModels}
+                        className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold font-sans flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                      >
+                        <RefreshCw size={13} className={refreshingAllModels ? "animate-spin" : ""} />
+                        <span>{refreshingAllModels ? "探测同步中..." : "探测全部节点"}</span>
+                      </button>
+                      <div className="w-full sm:w-72 relative font-sans">
+                        <input
+                          type="search"
+                          placeholder="关键字模糊检索大模型 (如 qwen, deepseek)..."
+                          value={modelsSearch}
+                          onChange={(e) => setModelsSearch(e.target.value)}
+                          className="w-full border border-slate-250 focus:border-slate-450 p-2.5 pl-3.5 text-xs font-mono focus:ring-0 focus:outline-none bg-slate-50 rounded-xl font-semibold"
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -1822,10 +1882,11 @@ export default function App() {
                       const ctxLen = sampleKey?.modelDetails?.[modelId]?.contextLength;
                       const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : null;
                       const modelType = detectModelType(modelId);
+                      const testResult = modelTestResults[modelId];
 
                       return (
                         <div key={modelId} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden font-sans animate-fade-in">
-                          <div className="bg-slate-50 border-b border-slate-150 text-slate-700 p-3.5 px-4 flex justify-between items-center text-[10px] uppercase font-mono tracking-wider">
+                          <div className="bg-slate-50 border-b border-slate-150 text-slate-700 p-3.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-[10px] uppercase font-mono tracking-wider">
                             <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
                               <span className="bg-slate-200 text-slate-700 px-2.5 py-0.5 rounded-lg flex items-center gap-2 font-bold font-mono">
                                 模型: {modelId}
@@ -1836,7 +1897,42 @@ export default function App() {
                               </span>
                               <span className="text-slate-550 text-[9px] font-bold">{keysForModel.length} 个端点支持此模型路由</span>
                             </div>
+
+                            <div className="flex items-center gap-2 font-sans normal-case">
+                              {testResult && (
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                                  testResult.success
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                    : "bg-rose-50 text-rose-700 border-rose-200"
+                                }`}>
+                                  {testResult.success ? `✓ ${testResult.latency}ms (${testResult.keyName || "OK"})` : `✗ ${testResult.status || "FAIL"}`}
+                                </span>
+                              )}
+                              <button
+                                onClick={() => runTestForModel(modelId)}
+                                disabled={testingModel === modelId}
+                                className="px-2.5 py-1 bg-slate-200/80 hover:bg-slate-300 text-slate-700 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                              >
+                                {testingModel === modelId ? <RefreshCw size={10} className="animate-spin" /> : <Play size={10} />}
+                                <span>{testingModel === modelId ? "连通性测试中..." : "测试连通性"}</span>
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setPlaygroundModel(modelId);
+                                  setViewMode('playground');
+                                }}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                              >
+                                <span>在线调试</span>
+                              </button>
+                            </div>
                           </div>
+                          
+                          {testResult && !testResult.success && testResult.error && (
+                            <div className="bg-rose-50 border-b border-rose-200 p-2.5 px-4 text-xs font-mono text-rose-700 flex items-center justify-between">
+                              <span className="truncate">⚠️ 测试报错: {testResult.error}</span>
+                            </div>
+                          )}
                           
                           <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-150 font-sans">
                             {/* Left Column: Endpoints list */}
@@ -2009,6 +2105,7 @@ export default function App() {
                                   <span className="bg-emerald-500/15 text-emerald-400 border border-emerald-500/10 px-2 py-0.5 text-[8.5px] font-mono font-black uppercase tracking-wider rounded">{log.method}</span>
                                   <span className="font-mono font-bold text-slate-200">{log.model}</span>
                                   <span className="text-[10px] bg-slate-900 text-slate-400 font-mono border border-slate-800/60 px-1.5 py-0.5 rounded-md">{log.keyName}</span>
+                                  <span className="text-[10px] text-slate-400 font-mono bg-slate-900/60 px-2 py-0.5 rounded border border-slate-800/40">📅 {formatDateTime(log.timestamp)}</span>
                                 </div>
                                 <p className="text-[11px] text-slate-500 font-mono break-all">{log.path}</p>
                               </div>
