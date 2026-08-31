@@ -28,6 +28,7 @@ export interface NimKey {
   quotaLimit?: number; // Total quota (e.g. tokens or requests, default to 0 for unlimited)
   quotaUsed?: number;  // Current usage
   modelFilters?: string[]; // Only handle specific models
+  provider?: "openai" | "gemini" | "claude" | "antigravity";
 }
 
 export type LBStrategy = "round-robin" | "random" | "least-used" | "weighted";

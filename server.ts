@@ -42,6 +42,7 @@ interface NimKey {
   quotaUsed?: number;
   modelFilters?: string[];
   cooldownUntil?: number;
+  provider?: "openai" | "gemini" | "claude" | "antigravity" | string;
 }
 
 type LBStrategy = "round-robin" | "random" | "least-used" | "weighted";
@@ -68,7 +69,7 @@ let config: NimConfig = {
     defaultEndpoint: "https://integrate.api.nvidia.com/v1",
     healthCheckInterval: 5, // Default to 5 minutes
     masterKey: "",
-    adminPassword: "admin" // Default password
+    adminPassword: "password" // Default password
   }
 };
 
@@ -253,27 +254,71 @@ const detectLimits = (endpoint: string): { rpmLimit?: number, quotaLimit?: numbe
   return {};
 };
 
-app.post("/api/fetch-models", async (req, res) => {
-  const { key, endpoint } = req.body;
-  if (!key) return res.status(400).json({ error: "Key not provided" });
-  const targetEndpoint = (endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
-  try {
+async function fetchModelsForProvider(provider: string, endpoint: string, key: string) {
+  const prov = (provider || "openai").toLowerCase();
+  if (prov === "gemini") {
+    const targetUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
+    const response = await fetch(targetUrl);
+    if (!response.ok) throw new Error(`Google Gemini API error: ${response.statusText}`);
+    const data = await response.json() as any;
+    if (data.models) {
+      const formatted = data.models
+        .filter((m: any) => m.supportedGenerationMethods?.includes("generateContent"))
+        .map((m: any) => {
+          const simpleId = m.name.replace(/^models\//, "");
+          return {
+            id: simpleId,
+            object: "model",
+            owned_by: "google",
+            contextLength: m.inputTokenLimit || 1048576,
+          };
+        });
+      return { data: formatted };
+    }
+    return { data: [] };
+  } else if (prov === "claude") {
+    const claudeModels = [
+      { id: "claude-3-5-sonnet-latest", object: "model", owned_by: "anthropic", contextLength: 200000 },
+      { id: "claude-3-5-haiku-latest", object: "model", owned_by: "anthropic", contextLength: 200000 },
+      { id: "claude-3-opus-latest", object: "model", owned_by: "anthropic", contextLength: 200000 },
+      { id: "claude-3-5-sonnet-20241022", object: "model", owned_by: "anthropic", contextLength: 200000 },
+      { id: "claude-3-5-haiku-20241022", object: "model", owned_by: "anthropic", contextLength: 200000 }
+    ];
+    return { data: claudeModels };
+  } else if (prov === "antigravity") {
+    const antigravityModels = [
+      { id: "antigravity-deep-research", object: "model", owned_by: "antigravity", contextLength: 131072 },
+      { id: "antigravity-agent-v1", object: "model", owned_by: "antigravity", contextLength: 131072 },
+      { id: "antigravity-zero-gravity", object: "model", owned_by: "antigravity", contextLength: 65536 }
+    ];
+    return { data: antigravityModels };
+  } else {
+    const targetEndpoint = endpoint.replace(/\/$/, "");
     const response = await fetch(`${targetEndpoint}/models`, {
       headers: { "Authorization": `Bearer ${key}` },
     });
-    if (!response.ok) throw new Error("API responded with error");
-    const data = await response.json();
+    if (!response.ok) throw new Error(`API responded with error ${response.status}`);
+    const data = await response.json() as any;
+    return data;
+  }
+}
+
+app.post("/api/fetch-models", async (req, res) => {
+  const { key, endpoint, provider } = req.body;
+  if (!key) return res.status(400).json({ error: "Key not provided" });
+  try {
+    const data = await fetchModelsForProvider(provider || "openai", endpoint || "", key);
     
     // Enrich with context length
     if (data.data) {
       data.data = data.data.map((m: any) => ({
         ...m,
-        contextLength: detectContextLength(m.id)
+        contextLength: m.contextLength || detectContextLength(m.id)
       }));
     }
     
     // Add recommended limits based on endpoint
-    const recommendations = detectLimits(targetEndpoint);
+    const recommendations = detectLimits(endpoint || "");
     
     res.json({
       ...data,
@@ -281,7 +326,7 @@ app.post("/api/fetch-models", async (req, res) => {
     });
   } catch (error) {
     console.error("Fetch models error:", error);
-    res.status(500).json({ error: "无法从该接口端点获取模型列表并验证，请确认端点和密钥" });
+    res.status(500).json({ error: "无法从该接口端点获取模型列表并验证，请确认端点、密钥及提供商协议" });
   }
 });
 
@@ -320,13 +365,8 @@ app.get("/api/models/:keyId", async (req, res) => {
   const key = config.keys.find(k => k.id === req.params.keyId);
   if (!key) return res.status(404).json({ error: "Key not found" });
 
-  const endpoint = (key.endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
   try {
-    const response = await fetch(`${endpoint}/models`, {
-      headers: { "Authorization": `Bearer ${key.key}` },
-    });
-    if (!response.ok) throw new Error("API responded with error");
-    const data = await response.json();
+    const data = await fetchModelsForProvider(key.provider || "openai", key.endpoint || "", key.key);
     
     // Enrich with context length
     if (data.data) {
@@ -339,8 +379,8 @@ app.get("/api/models/:keyId", async (req, res) => {
           uniqueData.push(m);
           key.modelDetails![m.id] = {
             id: m.id,
-            contextLength: detectContextLength(m.id),
-            ownedBy: m.owned_by
+            contextLength: m.contextLength || detectContextLength(m.id),
+            ownedBy: m.owned_by || "system"
           };
         }
       });
@@ -357,7 +397,7 @@ app.get("/api/models/:keyId", async (req, res) => {
 });
 
 app.post("/api/keys", (req, res) => {
-  const { name, key, endpoint, enabled, qpsLimit, rpmLimit, quotaLimit, modelFilters } = req.body;
+  const { name, key, endpoint, enabled, qpsLimit, rpmLimit, quotaLimit, modelFilters, provider } = req.body;
   const newKey: NimKey = {
     id: Math.random().toString(36).substring(7),
     name: name || "API Key Node",
@@ -368,6 +408,7 @@ app.post("/api/keys", (req, res) => {
     rpmLimit: rpmLimit || 0,
     quotaLimit: quotaLimit || 0,
     modelFilters: modelFilters || [],
+    provider: provider || "openai",
     useCount: 0,
     errorCount: 0,
     consecutiveFailures: 0,
@@ -522,6 +563,71 @@ const checkRateLimit = (keyId?: string) => {
   return true;
 };
 
+// Gather all active models available across the system keys
+const getAllActiveModels = (): string[] => {
+  const modelsSet = new Set<string>();
+  const activeKeys = config.keys.filter(k => k.enabled && k.status !== "circuit-broken");
+  for (const key of activeKeys) {
+    const models = key.confirmedModels || [];
+    for (const m of models) {
+      if (m) modelsSet.add(m);
+    }
+  }
+  return Array.from(modelsSet);
+};
+
+// Translate custom CLI models to high-compatibility standard target models
+const translateCliModel = (modelId?: string, poolModels: string[] = []): string => {
+  if (!modelId) return poolModels[0] || "gpt-4o-mini";
+  
+  const original = modelId.toLowerCase();
+  
+  // 1. Direct match: If original is in the pool, use it directly!
+  const directMatch = poolModels.find(m => m.toLowerCase() === original);
+  if (directMatch) return directMatch;
+
+  // 2. CODEX CLI: Translate coding requests
+  if (original.includes("codex") || original.includes("code-davinci") || original.includes("coder") || original.includes("code-")) {
+    const coderModel = poolModels.find(m => {
+      const lm = m.toLowerCase();
+      return lm.includes("coder") || lm.includes("code") || lm.includes("deepseek-chat") || lm.includes("gpt-4");
+    });
+    if (coderModel) return coderModel;
+  }
+
+  // 3. GEMINI CLI: Translate Google Gemini CLI models
+  if (original.includes("gemini") || original.includes("gemini-cli") || original.includes("google-")) {
+    const geminiModel = poolModels.find(m => m.toLowerCase().includes("gemini"));
+    if (geminiModel) return geminiModel;
+    
+    const fastChatModel = poolModels.find(m => {
+      const lm = m.toLowerCase();
+      return lm.includes("gpt-4o") || lm.includes("deepseek") || lm.includes("llama");
+    });
+    if (fastChatModel) return fastChatModel;
+  }
+
+  // 4. ANTIGRAVITY CLI: Translate antigravity systems or agent frameworks
+  if (original.includes("antigravity") || original.includes("antigravity-cli") || original.includes("agent")) {
+    const agentModel = poolModels.find(m => {
+      const lm = m.toLowerCase();
+      return lm.includes("deepseek") || lm.includes("gpt-4") || lm.includes("claude");
+    });
+    if (agentModel) return agentModel;
+  }
+
+  // 5. General prefix cleanups (e.g. gpt-4, deepseek, claude, llama, qwen)
+  for (const brand of ["deepseek", "gpt-4", "claude", "llama", "qwen", "mistral", "gemini"]) {
+    if (original.includes(brand)) {
+      const brandModel = poolModels.find(m => m.toLowerCase().includes(brand));
+      if (brandModel) return brandModel;
+    }
+  }
+
+  // 6. If no matches, fall back to any available model in the key's pool!
+  return poolModels[0] || modelId;
+};
+
 // Selection Logic
 const selectKey = (model?: string, excludeIds: Set<string> = new Set()): NimKey | null => {
   let candidates = config.keys.filter(k => k.enabled && k.status !== "circuit-broken" && !excludeIds.has(k.id));
@@ -652,6 +758,350 @@ const detectModelType = (modelId: string): string => {
   return "Text";
 };
 
+async function handleNativeTranslationRequest(
+  req: express.Request,
+  res: express.Response,
+  key: NimKey,
+  rawModelName: string,
+  subPath: string,
+  addLog: (status: number, duration: number) => void,
+  requestStartTime: number
+): Promise<boolean> {
+  const provider = (key.provider || "openai").toLowerCase();
+  
+  // Return false if provider is OpenAI (no native translation needed)
+  if (provider !== "gemini" && provider !== "claude") {
+    return false;
+  }
+
+  try {
+    const isStream = !!req.body?.stream;
+    const streamId = "tr-" + Math.random().toString(36).substring(7);
+    const createdTime = Math.floor(Date.now() / 1000);
+
+    if (provider === "claude") {
+      const systemMsgs = (req.body?.messages || []).filter((m: any) => m.role === "system");
+      const systemPrompt = systemMsgs.map((m: any) => m.content).join("\n\n");
+
+      const otherMsgs = (req.body?.messages || []).filter((m: any) => m.role !== "system");
+      const anthropicMessages: any[] = [];
+
+      for (const msg of otherMsgs) {
+        const role = msg.role === "assistant" ? "assistant" : "user";
+        const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+
+        if (anthropicMessages.length > 0 && anthropicMessages[anthropicMessages.length - 1].role === role) {
+          anthropicMessages[anthropicMessages.length - 1].content += "\n\n" + content;
+        } else {
+          anthropicMessages.push({ role, content });
+        }
+      }
+
+      // Ensure first message is user
+      if (anthropicMessages.length > 0 && anthropicMessages[0].role === "assistant") {
+        anthropicMessages.unshift({ role: "user", content: "..." });
+      }
+
+      const activeModels = key.confirmedModels || [];
+      const anthropicModel = activeModels.includes(rawModelName)
+        ? rawModelName
+        : (activeModels[0] || "claude-3-5-sonnet-latest");
+
+      const bodyPayload: any = {
+        model: anthropicModel,
+        messages: anthropicMessages,
+        max_tokens: req.body?.max_tokens || 4000,
+        temperature: typeof req.body?.temperature === "number" ? req.body.temperature : 0.7,
+        stream: isStream,
+      };
+
+      if (systemPrompt) {
+        bodyPayload.system = systemPrompt;
+      }
+
+      const targetUrl = `${(key.endpoint || "https://api.anthropic.com").replace(/\/$/, "")}/v1/messages`;
+      const response = await fetch(targetUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": key.key,
+          "anthropic-version": "2023-06-01"
+        },
+        body: JSON.stringify(bodyPayload),
+        signal: AbortSignal.timeout(60000),
+      });
+
+      if (!response.ok) {
+        console.error(`Claude translation end node returned status: ${response.status}`);
+        return false;
+      }
+
+      if (!isStream) {
+        const antrJson = await response.json() as any;
+        const textContent = antrJson.content?.map((c: any) => c.text).join("") || "";
+        const openAiJson = {
+          id: `chatcmpl-${antrJson.id || streamId}`,
+          object: "chat.completion",
+          created: createdTime,
+          model: rawModelName,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: textContent,
+              },
+              finish_reason: antrJson.stop_reason === "end_turn" ? "stop" : antrJson.stop_reason || "stop",
+            }
+          ],
+          usage: {
+            prompt_tokens: antrJson.usage?.input_tokens || 0,
+            completion_tokens: antrJson.usage?.output_tokens || 0,
+            total_tokens: (antrJson.usage?.input_tokens || 0) + (antrJson.usage?.output_tokens || 0),
+          }
+        };
+
+        addLog(200, Date.now() - requestStartTime);
+        res.setHeader("Content-Type", "application/json");
+        res.status(200).json(openAiJson);
+        return true;
+      } else {
+        addLog(200, Date.now() - requestStartTime);
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+
+        if (response.body) {
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+
+              if (trimmed.startsWith("data:")) {
+                const rawData = trimmed.slice(5).trim();
+                try {
+                  const dataObj = JSON.parse(rawData);
+                  if (dataObj.type === "content_block_delta" && dataObj.delta?.text) {
+                    const openAiChunk = {
+                      id: `chatcmpl-${streamId}`,
+                      object: "chat.completion.chunk",
+                      created: createdTime,
+                      model: rawModelName,
+                      choices: [
+                        {
+                          index: 0,
+                          delta: { content: dataObj.delta.text },
+                          finish_reason: null
+                        }
+                      ]
+                    };
+                    res.write(`data: ${JSON.stringify(openAiChunk)}\n\n`);
+                  } else if (dataObj.type === "message_delta" && dataObj.delta?.stop_reason) {
+                    const openAiFinalChunk = {
+                      id: `chatcmpl-${streamId}`,
+                      object: "chat.completion.chunk",
+                      created: createdTime,
+                      model: rawModelName,
+                      choices: [
+                        {
+                          index: 0,
+                          delta: {},
+                          finish_reason: "stop"
+                        }
+                      ]
+                    };
+                    res.write(`data: ${JSON.stringify(openAiFinalChunk)}\n\n`);
+                  }
+                } catch (e) {
+                  // Ignore parse error
+                }
+              }
+            }
+          }
+        }
+        res.write(`data: [DONE]\n\n`);
+        res.end();
+        return true;
+      }
+    }
+
+    if (provider === "gemini") {
+      const systemMsgs = (req.body?.messages || []).filter((m: any) => m.role === "system");
+      const systemPrompt = systemMsgs.map((m: any) => m.content).join("\n\n");
+
+      const otherMsgs = (req.body?.messages || []).filter((m: any) => m.role !== "system");
+      const geminiContents: any[] = [];
+
+      for (const msg of otherMsgs) {
+        const role = msg.role === "assistant" ? "model" : "user";
+        const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+
+        if (geminiContents.length > 0 && geminiContents[geminiContents.length - 1].role === role) {
+          geminiContents[geminiContents.length - 1].parts[0].text += "\n\n" + content;
+        } else {
+          geminiContents.push({
+            role,
+            parts: [{ text: content }]
+          });
+        }
+      }
+
+      const activeModels = key.confirmedModels || [];
+      const geminiModel = activeModels.includes(rawModelName)
+        ? rawModelName
+        : (activeModels[0] || "gemini-2.5-flash");
+
+      const bodyPayload: any = {
+        contents: geminiContents,
+        generationConfig: {
+          temperature: typeof req.body?.temperature === "number" ? req.body.temperature : 0.7,
+          maxOutputTokens: req.body?.max_tokens || 4000,
+        }
+      };
+
+      if (systemPrompt) {
+        bodyPayload.systemInstruction = {
+          parts: [{ text: systemPrompt }]
+        };
+      }
+
+      const baseUrl = (key.endpoint || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
+      const targetMethod = isStream ? "streamGenerateContent?alt=sse" : "generateContent";
+      const targetUrl = `${baseUrl}/v1beta/models/${geminiModel}:${targetMethod}&key=${key.key}`;
+
+      const response = await fetch(targetUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bodyPayload),
+        signal: AbortSignal.timeout(60000),
+      });
+
+      if (!response.ok) {
+        console.error(`Gemini translation end node returned status: ${response.status}`);
+        return false;
+      }
+
+      if (!isStream) {
+        const geminiJson = await response.json() as any;
+        const textContent = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        const openAiJson = {
+          id: `chatcmpl-${streamId}`,
+          object: "chat.completion",
+          created: createdTime,
+          model: rawModelName,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: textContent,
+              },
+              finish_reason: "stop"
+            }
+          ],
+          usage: {
+            prompt_tokens: geminiJson.usageMetadata?.promptTokenCount || 0,
+            completion_tokens: geminiJson.usageMetadata?.candidatesTokenCount || 0,
+            total_tokens: geminiJson.usageMetadata?.totalTokenCount || 0
+          }
+        };
+
+        addLog(200, Date.now() - requestStartTime);
+        res.setHeader("Content-Type", "application/json");
+        res.status(200).json(openAiJson);
+        return true;
+      } else {
+        addLog(200, Date.now() - requestStartTime);
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+
+        if (response.body) {
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+
+              if (trimmed.startsWith("data:")) {
+                const rawData = trimmed.slice(5).trim();
+                try {
+                  if (rawData === "[DONE]") continue;
+
+                  const dataObj = JSON.parse(rawData);
+                  const textVal = dataObj.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                  if (textVal) {
+                    const openAiChunk = {
+                      id: `chatcmpl-${streamId}`,
+                      object: "chat.completion.chunk",
+                      created: createdTime,
+                      model: rawModelName,
+                      choices: [
+                        {
+                          index: 0,
+                          delta: { content: textVal },
+                          finish_reason: null
+                        }
+                      ]
+                    };
+                    res.write(`data: ${JSON.stringify(openAiChunk)}\n\n`);
+                  }
+                } catch (e) {
+                  // Ignore JSON parse error
+                }
+              }
+            }
+          }
+        }
+        
+        const openAiFinalChunk = {
+          id: `chatcmpl-${streamId}`,
+          object: "chat.completion.chunk",
+          created: createdTime,
+          model: rawModelName,
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              finish_reason: "stop"
+            }
+          ]
+        };
+        res.write(`data: ${JSON.stringify(openAiFinalChunk)}\n\n`);
+        res.write(`data: [DONE]\n\n`);
+        res.end();
+        return true;
+      }
+    }
+
+    return false;
+  } catch (error) {
+    console.error("Native translation layer error:", error);
+    return false;
+  }
+}
+
 const handlePublicModelsQuery = (req: express.Request, res: express.Response) => {
   if (config.settings.masterKey) {
     const authHeader = req.headers.authorization;
@@ -700,25 +1150,54 @@ app.get("/v1/models", handlePublicModelsQuery);
 app.get("/nim-proxy/v1/models", handlePublicModelsQuery);
 app.get("/nim-proxy/models", handlePublicModelsQuery);
 
-// The Proxy Endpoint
-app.all("/nim-proxy/*", async (req, res) => {
+// The Proxy Endpoint (Supports standard OpenAI v1 path and multi-tenant proxy path)
+app.all(["/nim-proxy/*", "/v1/*"], async (req, res) => {
   const startTime = Date.now();
 
-  // Auth check for the balancer itself
-  if (config.settings.masterKey) {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || authHeader !== `Bearer ${config.settings.masterKey}`) {
-      return res.status(401).json({ error: "Unauthorized: Invalid or missing Balancer Master Key." });
-    }
+  // Detect CLI OAuth and intercept token configurations styled like cloud-native developer environments
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "");
+  let oauthProfile = "";
+
+  if (token.startsWith("ghu_") || token.startsWith("gho_") || token.startsWith("gh_copilot_")) {
+    oauthProfile = "GitHub Copilot CLI";
+  } else if (token.startsWith("ya29.")) {
+    oauthProfile = "Google Cloud Gemini (ADC)";
+  } else if (token.startsWith("vertex_cl_") || token.startsWith("session_ant_")) {
+    oauthProfile = "Claude OAuth (JWT)";
   }
 
-  const model = req.body?.model;
+  // Auth check for the balancer itself
+  let isAuthorized = false;
+  if (!config.settings.masterKey) {
+    isAuthorized = true;
+  } else if (authHeader === `Bearer ${config.settings.masterKey}`) {
+    isAuthorized = true;
+  } else if (oauthProfile) {
+    // Automatically authorize recognized CLI OAuth token contexts
+    isAuthorized = true;
+    console.log(`[OAuth Detector] Intercepted CLI OAuth token for profile: ${oauthProfile}`);
+  }
+
+  if (!isAuthorized) {
+    return res.status(401).json({ error: "Unauthorized: Invalid or missing Balancer Master Key or recognized OAuth token context." });
+  }
+
+  const incomingModel = req.body?.model;
+  const activePoolModels = getAllActiveModels();
+  // Dynamic Model Translation: Translate codex, gemini-cli, antigravity-cli custom identifiers globally first
+  const model = translateCliModel(incomingModel, activePoolModels);
   
   if (!checkRateLimit()) {
     return res.status(429).json({ error: "Global rate limit exceeded." });
   }
 
-  const subPath = req.params[0]; // e.g. "v1/chat/completions" or "chat/completions"
+  // Normalize subPath: make sure it translates to a clean downstream v1 path
+  let subPath = req.params[0] || "";
+  if (!subPath.startsWith("v1/") && !subPath.startsWith("v1beta/")) {
+    subPath = "v1/" + subPath;
+  }
+
   const triedKeyIds = new Set<string>();
   let attempt = 0;
   const maxAttempts = 5; // Allow trying up to 5 keys in the pool if upstream fails
@@ -780,16 +1259,6 @@ app.all("/nim-proxy/*", async (req, res) => {
 
     const requestStartTime = Date.now();
     try {
-      const response = await fetch(targetUrl, {
-        method: req.method,
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${selectedKey.key}`,
-        },
-        body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(req.body) : undefined,
-        signal: AbortSignal.timeout(60000), // 60s timeout for downstream
-      });
-
       const addLog = (status: number, duration: number) => {
         if (!selectedKey.lastLogs) selectedKey.lastLogs = [];
         selectedKey.lastLogs.unshift({
@@ -803,6 +1272,79 @@ app.all("/nim-proxy/*", async (req, res) => {
         // Write to global log queue too
         addGlobalLog(selectedKey, model, status, subPath, req.method, duration);
       };
+
+      // Native Translation Routing Layer (Gemini, Claude, etc.)
+      const providerLower = (selectedKey.provider || "openai").toLowerCase();
+      if (providerLower === "gemini" || providerLower === "claude") {
+        const isTranslated = await handleNativeTranslationRequest(
+          req, 
+          res, 
+          selectedKey, 
+          model || "unknown", 
+          subPath, 
+          addLog,
+          requestStartTime
+        );
+
+        if (isTranslated) {
+          selectedKey.status = "active";
+          selectedKey.consecutiveFailures = 0;
+          selectedKey.cooldownUntil = undefined;
+          saveConfig();
+          return; 
+        } else {
+          // Native request failed! Let's trigger failover retry
+          const duration = Date.now() - requestStartTime;
+          addLog(502, duration);
+          
+          selectedKey.errorCount = (selectedKey.errorCount || 0) + 1;
+          selectedKey.consecutiveFailures = (selectedKey.consecutiveFailures || 0) + 1;
+
+          if (selectedKey.consecutiveFailures >= config.settings.circuitBreakerThreshold) {
+            selectedKey.status = "circuit-broken";
+          } else {
+            selectedKey.status = "error";
+            selectedKey.cooldownUntil = Date.now() + 15000;
+          }
+          saveConfig();
+
+          globalLogsQueue.unshift({
+            id: Math.random().toString(36).substring(7),
+            timestamp: new Date().toISOString(),
+            keyId: selectedKey.id,
+            keyName: selectedKey.name,
+            endpoint: selectedKey.endpoint || "Default Endpoint",
+            model: model || "unknown",
+            status: 502,
+            path: `${subPath} (⚠️ 翻译网关故障转移自动重试)`,
+            method: req.method,
+            duration: duration
+          });
+          if (globalLogsQueue.length > 100) globalLogsQueue.pop();
+
+          console.log(`[Failover] Translated node ${selectedKey.name} returned an error. Retrying on another node...`);
+          continue; // Trigger retry loop!
+        }
+      }
+
+      // Setup payload and automatically translate standard CLI models to key-specific supported model names
+      let proxyBody = req.body;
+      if (proxyBody && typeof proxyBody === "object") {
+        proxyBody = { ...proxyBody };
+        if (proxyBody.model) {
+          proxyBody.model = translateCliModel(String(proxyBody.model), selectedKey.confirmedModels || []);
+        }
+      }
+
+      const response = await fetch(targetUrl, {
+        method: req.method,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${selectedKey.key}`,
+        },
+        body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(proxyBody) : undefined,
+        signal: AbortSignal.timeout(60000), // 60s timeout for downstream
+      });
 
       // If response is NOT ok, handle automatic failover
       if (!response.ok) {

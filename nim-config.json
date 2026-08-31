@@ -1,0 +1,12 @@
+{
+  "keys": [],
+  "settings": {
+    "strategy": "round-robin",
+    "globalQpsLimit": 0,
+    "circuitBreakerThreshold": 5,
+    "defaultEndpoint": "https://integrate.api.nvidia.com/v1",
+    "healthCheckInterval": 5,
+    "masterKey": "",
+    "adminPassword": "password"
+  }
+}

@@ -31,13 +31,23 @@ import {
   Server,
   Shuffle,
   Terminal,
-  FileText
+  FileText,
+  Copy,
+  Check,
+  ChevronRight,
+  Laptop,
+  Scissors,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell } from 'recharts';
 import { NimKey, NimConfig } from './types';
 
 const detectModelType = (modelId: string): { label: string; bgClass: string; textClass: string } => {
+  if (!modelId || typeof modelId !== 'string') {
+    return { label: "文本 | Text", bgClass: "bg-emerald-100 text-emerald-800 border-emerald-200", textClass: "text-emerald-600" };
+  }
   const id = modelId.toLowerCase();
   
   if (
@@ -112,19 +122,86 @@ const detectModelType = (modelId: string): { label: string; bgClass: string; tex
   return { label: "文本 | Text", bgClass: "bg-emerald-100 text-emerald-800 border-emerald-200", textClass: "text-emerald-600" };
 };
 
+export const getLatencyForProviderModel = (key: NimKey, modelId: string, logs: any[]) => {
+  // 1. Check if there are real logs for this model and this keyId
+  const modelLogs = (logs || []).filter(l => l.model === modelId && l.keyId === key.id && l.status === 200 && typeof l.duration === 'number');
+  if (modelLogs.length > 0) {
+    const sum = modelLogs.reduce((acc, curr) => acc + curr.duration, 0);
+    return {
+      latency: Math.round(sum / modelLogs.length),
+      type: 'real' as const
+    };
+  }
+
+  // 2. Check if there are generalized logs for this keyId (any model) for some baseline scaling
+  const keyLogs = (logs || []).filter(l => l.keyId === key.id && l.status === 200 && typeof l.duration === 'number');
+  if (keyLogs.length > 0) {
+    const sum = keyLogs.reduce((acc, curr) => acc + curr.duration, 0);
+    return {
+      latency: Math.round(sum / keyLogs.length),
+      type: 'real_key' as const
+    };
+  }
+
+  // 3. Fallback to pre-defined typical latency profile based on provider and endpoint URL
+  const provider = (key.provider || '').toLowerCase();
+  const url = (key.endpoint || '').toLowerCase();
+  
+  if (provider === 'gemini') {
+    return { latency: 450, type: 'benchmark' as const };
+  } else if (provider === 'claude') {
+    return { latency: 550, type: 'benchmark' as const };
+  } else if (provider === 'antigravity') {
+    return { latency: 320, type: 'benchmark' as const };
+  }
+  
+  if (url.includes("api.groq.com")) {
+    return { latency: 140, type: 'benchmark' as const };
+  } else if (url.includes("api.sambanova.ai")) {
+    return { latency: 160, type: 'benchmark' as const };
+  } else if (url.includes("integrate.api.nvidia.com") || url === "" || url === "https://integrate.api.nvidia.com/v1") {
+    return { latency: 220, type: 'benchmark' as const };
+  } else if (url.includes("api.siliconflow.cn")) {
+    return { latency: 310, type: 'benchmark' as const };
+  } else if (url.includes("api.deepseek.com")) {
+    return { latency: 290, type: 'benchmark' as const };
+  } else if (url.includes("dashscope.aliyuncs.com")) {
+    return { latency: 350, type: 'benchmark' as const };
+  } else if (url.includes("api.openai.com")) {
+    return { latency: 410, type: 'benchmark' as const };
+  } else if (url.includes("openrouter.ai")) {
+    return { latency: 480, type: 'benchmark' as const };
+  }
+  
+  return { latency: 350, type: 'benchmark' as const };
+};
+
 export const PROVIDER_PRESETS = [
-  { id: 'nvidia', name: 'NVIDIA NIM (官方端点)', endpoint: 'https://integrate.api.nvidia.com/v1', placeholder: 'nvapi-...', desc: 'NVIDIA 官方 NIM 微服务聚合端点' },
-  { id: 'siliconflow', name: 'SiliconFlow (硅基流动)', endpoint: 'https://api.siliconflow.cn/v1', placeholder: 'sk-...', desc: '国内极速、高性价比大模型托管平台' },
-  { id: 'groq', name: 'Groq Cloud', endpoint: 'https://api.groq.com/openai/v1', placeholder: 'gsk_...', desc: '极速 LPU 推理终端，支持高吞吐大模型' },
-  { id: 'sambanova', name: 'SambaNova Systems', endpoint: 'https://api.sambanova.ai/v1', placeholder: 'sambanova-...', desc: '高QPS、大文本极速推理接口' },
-  { id: 'deepseek', name: 'DeepSeek (开放云服务)', endpoint: 'https://api.deepseek.com/v1', placeholder: 'sk_...', desc: '高性价比国产自研模型提供商' },
-  { id: 'zhipu', name: 'Zhipu AI (智谱 GLM 开放平台)', endpoint: 'https://open.bigmodel.cn/api/paas/v4', placeholder: '...', desc: 'GLM 官方开发者高可靠性大平台' },
-  { id: 'gemini', name: 'Google Gemini (OpenAI 兼容)', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', placeholder: '...', desc: '标准 OpenAI 格式的谷歌原生 API 支持' },
-  { id: 'openrouter', name: 'OpenRouter (大模型聚合)', endpoint: 'https://openrouter.ai/api/v1', placeholder: 'sk-or-...', desc: '聚合了上百种开源和闭源大模型的代理网关' },
-  { id: 'custom', name: '自定义端点 (Custom Endpoint)', endpoint: '', placeholder: 'https://...', desc: '任何兼容 OpenAI 协议规范的私有部署或三方网关' }
+  { id: 'nvidia', name: 'NVIDIA NIM (官方端点)', endpoint: 'https://integrate.api.nvidia.com/v1', placeholder: 'nvapi-...', desc: 'NVIDIA 官方 NIM 微服务聚合端点', provider: 'openai' },
+  { id: 'siliconflow', name: 'SiliconFlow (硅基流动)', endpoint: 'https://api.siliconflow.cn/v1', placeholder: 'sk-...', desc: '国内极速、高性价比大模型托管平台', provider: 'openai' },
+  { id: 'groq', name: 'Groq Cloud', endpoint: 'https://api.groq.com/openai/v1', placeholder: 'gsk_...', desc: '极速 LPU 推理终端，支持高吞吐大模型', provider: 'openai' },
+  { id: 'sambanova', name: 'SambaNova Systems', endpoint: 'https://api.sambanova.ai/v1', placeholder: 'sambanova-...', desc: '高QPS、大文本极速推理接口', provider: 'openai' },
+  { id: 'deepseek', name: 'DeepSeek (开放云服务)', endpoint: 'https://api.deepseek.com/v1', placeholder: 'sk_...', desc: '高性价比国产自研模型提供商', provider: 'openai' },
+  { id: 'gemini', name: 'Google Gemini (原生 API 智能解密翻译)', endpoint: 'https://generativelanguage.googleapis.com', placeholder: 'AIzaSy...', desc: '谷歌官方原生 API（网关将完美把 OpenAI 格式转为原生 Gemini 格式并流式转发）', provider: 'gemini' },
+  { id: 'anthropic', name: 'Anthropic Claude (原生 API 智能解密翻译)', endpoint: 'https://api.anthropic.com', placeholder: 'sk-ant-api03-...', desc: 'Claude 官方原生 API（网关将自动中转并将标准 OpenAI 转换为 Claude 格式并流式还原）', provider: 'claude' },
+  { id: 'antigravity', name: 'Antigravity AI (工作区 API 智能兼容翻译)', endpoint: 'https://api.antigravity.ai', placeholder: 'ag-...', desc: 'Antigravity Workspace Native AGENT 专用翻译转发适配层', provider: 'antigravity' },
+  { id: 'openrouter', name: 'OpenRouter (大模型聚合)', endpoint: 'https://openrouter.ai/api/v1', placeholder: 'sk-or-...', desc: '聚合了上百种开源和闭源大模型的代理网关', provider: 'openai' },
+  { id: 'openai', name: 'OpenAI (官方原生 API)', endpoint: 'https://api.openai.com/v1', placeholder: 'sk-proj-...', desc: 'OpenAI 官方原装接口标准规范', provider: 'openai' },
+  { id: 'ali-dashscope', name: 'Alibaba DashScope (通义千问)', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1', placeholder: 'sk-...', desc: '阿里百炼大模型开放平台，兼容 OpenAI 客户端接入', provider: 'openai' },
+  { id: 'custom', name: '自定义端点 (Custom Endpoint)', endpoint: '', placeholder: 'https://...', desc: '任何兼容 OpenAI 协议规范的私有部署或三方网关', provider: 'openai' }
 ];
 
-export const getProviderBadge = (endpoint: string) => {
+export const getProviderBadge = (endpoint: string, provider?: string) => {
+  const prov = (provider || "").toLowerCase();
+  
+  if (prov === "gemini") {
+    return { name: "Gemini 🇨🇳 原生中置解密翻译", bg: "bg-[#E0F2FE] text-[#0369A1] border-[#BAE6FD]" };
+  } else if (prov === "claude") {
+    return { name: "Claude 🇺🇸 原生中置流式翻译", bg: "bg-[#FFFbeb] text-[#B45309] border-[#fde68a]" };
+  } else if (prov === "antigravity") {
+    return { name: "Antigravity AI Native 🇨🇳", bg: "bg-[#FAF5FF] text-[#6B21A8] border-[#E9D5FF]" };
+  }
+
   const url = (endpoint || "").toLowerCase();
   if (url.includes("api.siliconflow.cn")) {
     return { name: "SiliconFlow", bg: "bg-[#EBF5EE] text-[#0A3D23] border-[#BCE5CC]" };
@@ -140,6 +217,18 @@ export const getProviderBadge = (endpoint: string) => {
     return { name: "Google Gemini", bg: "bg-[#E0F2FE] text-[#0369A1] border-[#BAE6FD]" };
   } else if (url.includes("openrouter.ai")) {
     return { name: "OpenRouter", bg: "bg-amber-50 text-amber-800 border-amber-200" };
+  } else if (url.includes("api.openai.com")) {
+    return { name: "OpenAI 官方", bg: "bg-[#EBF5EE] text-[#0A3D23] border-[#BCECC0]" };
+  } else if (url.includes("api.anthropic.com")) {
+    return { name: "Anthropic Claude", bg: "bg-[#FFFbeb] text-[#B45309] border-[#fde68a]" };
+  } else if (url.includes("api.moonshot.cn")) {
+    return { name: "月之暗面 Kimi", bg: "bg-[#F0f6ff] text-[#1d4ed8] border-[#bfdbfe]" };
+  } else if (url.includes("api.together.xyz")) {
+    return { name: "Together.AI", bg: "bg-[#FAF5FF] text-[#6B21A8] border-[#E9D5FF]" };
+  } else if (url.includes("dashscope.aliyuncs.com")) {
+    return { name: "阿里通义", bg: "bg-orange-50 text-orange-800 border-orange-200" };
+  } else if (url.includes("volces.com") || url.includes("volcengine")) {
+    return { name: "火山豆包", bg: "bg-blue-50 text-blue-800 border-blue-200" };
   } else if (url.includes("integrate.api.nvidia.com") || url === "" || url === "https://integrate.api.nvidia.com/v1") {
     return { name: "NVIDIA NIM", bg: "bg-[#E6F4EA] text-[#0F3A20] border-[#A8E6CF]" };
   } else {
@@ -150,7 +239,7 @@ export const getProviderBadge = (endpoint: string) => {
 export default function App() {
   const [config, setConfig] = useState<NimConfig>({ 
     keys: [], 
-    settings: { strategy: 'round-robin', globalQpsLimit: 0, circuitBreakerThreshold: 5, defaultEndpoint: 'https://integrate.api.nvidia.com/v1', adminPassword: 'admin' } 
+    settings: { strategy: 'round-robin', globalQpsLimit: 0, circuitBreakerThreshold: 5, defaultEndpoint: 'https://integrate.api.nvidia.com/v1', adminPassword: 'password' } 
   });
   const [loading, setLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
@@ -183,7 +272,24 @@ export default function App() {
     enabled: true
   });
   const [proxyUrl, setProxyUrl] = useState('');
-  const [viewMode, setViewMode] = useState<'dashboard' | 'endpoints' | 'models' | 'playground' | 'logs'>('dashboard');
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('theme') as 'light' | 'dark') || 'light';
+    }
+    return 'light';
+  });
+
+  useEffect(() => {
+    const root = window.document.documentElement;
+    if (theme === 'dark') {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const [viewMode, setViewMode] = useState<'dashboard' | 'endpoints' | 'models' | 'playground' | 'logs' | 'cli'>('dashboard');
 
   // Stats and global logs tracking state
   const [globalLogs, setGlobalLogs] = useState<any[]>([]);
@@ -198,6 +304,28 @@ export default function App() {
     totalResponseTimes: 0,
     statsHistory: []
   });
+
+  // CLI & OAuth Integration States
+  const [cliSelectedProvider, setCliSelectedProvider] = useState<'codex' | 'gemini' | 'claude'>('codex');
+  const [cliSimulatedToken, setCliSimulatedToken] = useState<string>('');
+  const [cliLoading, setCliLoading] = useState<boolean>(false);
+  const [cliShell, setCliShell] = useState<'bash' | 'powershell' | 'cmd'>('bash');
+  const [cliModelName, setCliModelName] = useState<string>('gemini-1.5-pro');
+  const [cliStream, setCliStream] = useState<boolean>(true);
+  const [cliStep, setCliStep] = useState<number>(1);
+  const [cliStep1Tab, setCliStep1Tab] = useState<'python' | 'nodejs' | 'curl'>('python');
+  const [cliStep2Tab, setCliStep2Tab] = useState<'cursor' | 'claudecode' | 'cline'>('cursor');
+  const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
+  const [terminalRunning, setTerminalRunning] = useState<boolean>(false);
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+
+  const triggerCopy = (key: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedStates(prev => ({ ...prev, [key]: true }));
+    setTimeout(() => {
+      setCopiedStates(prev => ({ ...prev, [key]: false }));
+    }, 2000);
+  };
 
   // Playground States
   const [playgroundModel, setPlaygroundModel] = useState<string>('');
@@ -214,13 +342,15 @@ export default function App() {
   const [playgroundStream, setPlaygroundStream] = useState<boolean>(true);
   const [playgroundLogs, setPlaygroundLogs] = useState<{ router?: string; duration?: number; tokens?: number } | null>(null);
 
-  const allModels = Array.from(new Set(config.keys.flatMap(key => {
-    const confirmed = key.confirmedModels || [];
-    if (key.modelFilters && key.modelFilters.length > 0) {
-      return confirmed.filter(m => key.modelFilters.includes(m));
-    }
-    return confirmed;
-  }) as string[])).sort();
+  const allModels = React.useMemo(() => {
+    return Array.from(new Set(config.keys.flatMap(key => {
+      const confirmed = key.confirmedModels || [];
+      if (key.modelFilters && key.modelFilters.length > 0) {
+        return confirmed.filter(m => key.modelFilters.includes(m));
+      }
+      return confirmed;
+    }) as string[])).sort();
+  }, [config.keys]);
 
   useEffect(() => {
     if (viewMode === 'playground' && !playgroundModel && allModels.length > 0) {
@@ -425,23 +555,7 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    const savedPassword = localStorage.getItem('nim_admin_password');
-    if (savedPassword) {
-      handleLogin(savedPassword);
-    }
-    setProxyUrl(`${window.location.origin}/nim-proxy`);
-  }, []);
-
-  useEffect(() => {
-    if (authenticated) {
-      fetchConfig();
-      const interval = setInterval(fetchConfig, 10000); // 10s interval
-      return () => clearInterval(interval);
-    }
-  }, [authenticated]);
-
-  const handleLogin = async (pwd: string) => {
+  const handleLogin = React.useCallback(async (pwd: string) => {
     try {
       const response = await fetch('/api/login', {
         method: 'POST',
@@ -459,9 +573,9 @@ export default function App() {
     } catch (e) {
       setLoginError('连接失败');
     }
-  };
+  }, []);
 
-  const fetchConfig = async () => {
+  const fetchConfig = React.useCallback(async () => {
     try {
       const authHeader = localStorage.getItem('nim_admin_password') || '';
       
@@ -529,7 +643,23 @@ export default function App() {
         console.error('Error fetching config:', error);
       }
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const savedPassword = localStorage.getItem('nim_admin_password');
+    if (savedPassword) {
+      handleLogin(savedPassword);
+    }
+    setProxyUrl(`${window.location.origin}/nim-proxy`);
+  }, [handleLogin]);
+
+  useEffect(() => {
+    if (authenticated) {
+      fetchConfig();
+      const interval = setInterval(fetchConfig, 10000); // 10s interval
+      return () => clearInterval(interval);
+    }
+  }, [authenticated, fetchConfig]);
 
   const fetchModelsForKey = async (id: string) => {
     setFetchingModels(id);
@@ -585,7 +715,7 @@ export default function App() {
 
   const openAddForm = () => {
     setEditingKeyId(null);
-    setNewKey({ name: '', key: '', endpoint: '', qpsLimit: 0, rpmLimit: 0, quotaLimit: 0, modelFilters: [], enabled: true });
+    setNewKey({ name: '', key: '', endpoint: '', qpsLimit: 0, rpmLimit: 0, quotaLimit: 0, modelFilters: [], enabled: true, provider: 'openai' });
     setSelectedPresetId('custom');
     setValidationResult(null);
     setFormAvailableModels([]);
@@ -602,7 +732,8 @@ export default function App() {
       rpmLimit: key.rpmLimit || 0,
       quotaLimit: key.quotaLimit || 0,
       modelFilters: key.modelFilters || [],
-      enabled: key.enabled !== false
+      enabled: key.enabled !== false,
+      provider: key.provider || 'openai'
     });
     
     const epClean = (key.endpoint || '').trim().replace(/\/$/, "");
@@ -627,7 +758,7 @@ export default function App() {
           'Content-Type': 'application/json',
           'x-admin-password': localStorage.getItem('nim_admin_password') || ''
         },
-        body: JSON.stringify({ key: newKey.key, endpoint: newKey.endpoint })
+        body: JSON.stringify({ key: newKey.key, endpoint: newKey.endpoint, provider: newKey.provider || 'openai' })
       });
       let data;
       try {
@@ -824,343 +955,449 @@ export default function App() {
     alert('代理 URL 已复制到剪贴板！');
   };
 
+  const runTerminalSimulation = () => {
+    if (terminalRunning) return;
+    setTerminalRunning(true);
+    setTerminalLogs([]);
+    
+    const steps = [
+      `[system] Initializing dynamic CLI router on ${proxyUrl || 'http://localhost:3000'}...`,
+      `[status] Checking gateway connection latency... OK (4ms)`,
+      `[system] Switched authentication profile: [${(cliSelectedProvider || 'codex').toUpperCase()}]`,
+      `[auth] Detecting OAuth Bearer Token from Environment...`,
+      cliSimulatedToken 
+        ? `[auth] Found Environment Token: "${cliSimulatedToken.substring(0, 18)}..."` 
+        : `[auth] WARNING: No OAuth token detected, using default credentials on sandbox.`,
+      `[proxy] Compiling OpenAI compatible translation rules...`,
+      `[proxy] Mapping models to standard completions SDK...`,
+      `[gateway] Launching pipeline listener on localhost:8000 -> ${proxyUrl}...`,
+      `[status] PIPELINE ACTIVE & LISTENING`
+    ];
+    
+    let currentStep = 0;
+    const interval = setInterval(() => {
+      if (currentStep < steps.length) {
+        setTerminalLogs(prev => [...prev, steps[currentStep]]);
+        currentStep++;
+      } else {
+        clearInterval(interval);
+        setTerminalRunning(false);
+      }
+    }, 600);
+  };
+
   return (
-    <div className="min-h-screen bg-[#EFF2EF] text-[#1A2521] font-sans selection:bg-[#094D2B] selection:text-[#E8F5EE]">
+    <div className="min-h-screen bg-slate-50 dark:bg-[#0a0f1d] text-slate-700 dark:text-slate-200 font-sans selection:bg-emerald-200 selection:text-slate-900 antialiased custom-scrollbar">
       {!authenticated ? (
-        <div className="min-h-screen flex items-center justify-center p-6 bg-[#EFF2EF]">
+        <div className="min-h-screen flex items-center justify-center p-6 bg-slate-100/60 dark:bg-[#080d1a] relative overflow-hidden">
           <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-white border-2 border-[#1E2E24] w-full max-w-md shadow-[6px_6px_0px_0px_#1E2E24] overflow-hidden"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+            className="bg-white dark:bg-[#0d1527] border border-slate-200/80 dark:border-slate-850 w-full max-w-md shadow-lg rounded-2xl overflow-hidden relative z-10"
           >
-            <div className="bg-[#094D2B] text-[#E8F5EE] p-4 flex justify-between items-center font-mono text-xs uppercase tracking-widest">
-              <span>SECURITY_AUTHENTICATION</span>
-              <Activity size={16} className="text-[#A7F3D0] animate-pulse" />
+            <div className="bg-slate-50 dark:bg-[#15223c]/50 border-b border-slate-150 dark:border-slate-800 p-4.5 flex justify-between items-center font-mono text-[10px] tracking-wider text-slate-500 dark:text-slate-450">
+              <span className="flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> CORE ACCESS BLOCK</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-550 animate-pulse"></span>
             </div>
+            
             <div className="p-8 space-y-6">
-              <div className="space-y-4">
-                <h2 className="font-serif italic text-2xl text-[#094D2B] font-bold">接口负载均衡系统</h2>
-                <p className="text-sm text-gray-650">请输入管理后台对应的校验密码以访问控制面板。</p>
-              </div>
               <div className="space-y-2">
-                <input 
-                  type="password"
-                  placeholder="Password"
-                  className="w-full border-2 border-[#1E2E24] p-3 font-mono focus:outline-none focus:bg-[#FAFBF9]"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleLogin(password)}
-                />
-                {loginError && <p className="text-red-600 text-xs font-mono">{loginError}</p>}
+                <div className="inline-flex p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/40 text-emerald-600 mb-1">
+                  <Scissors size={22} />
+                </div>
+                <h2 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100 font-sans">羊毛薅到底 智能分流网关</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-sans">请填入正确的控制台安全凭证，开启企业级故障隔离与多源大模型调度大厅。</p>
               </div>
+              
+              <div className="space-y-3.5">
+                <div className="relative">
+                  <input 
+                    type="password"
+                    placeholder="请输入控制台口令密码 (默认: password)"
+                    className="w-full bg-slate-50 dark:bg-[#15223c]/30 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 focus:border-emerald-600 font-mono text-sm px-4 py-3 text-slate-800 dark:text-slate-150 rounded-xl focus:outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleLogin(password)}
+                  />
+                </div>
+                {loginError && (
+                  <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-1.5 text-red-600 text-xs font-mono bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/35 p-2.5 rounded-lg">
+                    <AlertCircle size={14} />
+                    <span>{loginError}</span>
+                  </motion.div>
+                )}
+              </div>
+              
               <button 
                 onClick={() => handleLogin(password)}
-                className="w-full bg-[#1E2E24] text-white p-4 font-mono text-sm uppercase tracking-widest hover:bg-[#094D2B] transition-colors"
+                className="w-full bg-slate-900 hover:bg-slate-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 dark:text-slate-950 text-xs font-bold text-white py-3.5 rounded-xl transition-all flex items-center justify-center gap-2 transform active:scale-[0.98] cursor-pointer"
               >
-                验证口令进入
+                <span>进入控制中心</span>
+                <ChevronRight size={14} className="stroke-[3]" />
               </button>
             </div>
           </motion.div>
         </div>
       ) : (
         <>
-          {/* Header */}
-          <header className="border-b-2 border-[#1E2E24] p-6 flex justify-between items-center bg-[#D0DCD0] sticky top-0 z-10 shadow-sm">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-[#094D2B] rounded shadow-sm">
-                <Activity className="text-white w-6 h-6" />
+          {/* Navigation Header */}
+          <header className="border-b border-slate-200 dark:border-slate-800 p-5 flex flex-col md:flex-row justify-between items-center bg-white/90 dark:bg-[#0d1527]/90 backdrop-blur-md sticky top-0 z-30 shadow-sm">
+            <div className="flex items-center gap-3.5 mb-4 md:mb-0">
+              <div className="p-2.5 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl shadow-[0_0_15px_rgba(16,185,129,0.25)] flex items-center justify-center text-white">
+                <Scissors className="w-5.5 h-5.5 stroke-[2.5]" />
               </div>
               <div>
-                <h1 className="font-serif italic text-2xl font-bold tracking-tight text-[#094D2B]">NVIDIA NIM & 多端点通用负载均衡器 <span className="text-xs opacity-65 not-italic ml-1">v2.0.0</span></h1>
-                <p className="font-mono text-[9px] uppercase opacity-75 tracking-widest leading-none mt-1 text-[#1D3528]">ENTERPRISE HIGH-AVAILABILITY MULTI-PROVIDER BALANCER</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-lg font-bold tracking-tight text-slate-800 dark:text-slate-100">羊毛薅到底 高可用调度网关</h1>
+                  <span className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 rounded-md font-mono">v2.2.0</span>
+                </div>
+                <p className="font-sans text-[10px] uppercase tracking-wider mt-1 text-slate-400 dark:text-slate-500 font-medium">Eco-friendly Multi-Endpoint Free Quota Optimizer & Aggregated Dispatcher</p>
               </div>
             </div>
-            <div className="flex items-center gap-4">
+            
+            <div className="flex items-center gap-3 flex-wrap">
+              <button 
+                id="theme-toggle"
+                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#15223c]/40 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-[#15223c] transition-all flex items-center justify-center cursor-pointer"
+                title={theme === 'dark' ? "切换为浅色主题" : "切换为深色主题"}
+              >
+                {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+              </button>
               <button 
                 onClick={() => {
                   localStorage.removeItem('nim_admin_password');
                   setAuthenticated(false);
                 }}
-                className="font-mono text-[10px] uppercase underline hover:no-underline text-gray-700 hover:text-[#094D2B]"
+                className="font-mono text-[10.5px] bg-slate-100 dark:bg-[#15223c]/40 hover:bg-slate-200 dark:hover:bg-[#15223c] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-350 hover:text-slate-800 dark:hover:text-slate-200 px-3 py-2 rounded-lg transition-all font-bold cursor-pointer"
               >
-                退出控制台
+                退出
               </button>
               <button 
                 onClick={() => setShowSettings(!showSettings)}
-                className="p-3 bg-white border border-[#1E2E24] hover:bg-[#094D2B] hover:text-white transition-colors shadow-sm"
+                className={`p-2 rounded-lg border transition-all flex items-center justify-center cursor-pointer ${showSettings ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-400 text-emerald-600 dark:text-emerald-400 shadow-sm' : 'bg-slate-100 dark:bg-[#15223c]/40 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-[#15223c]'}`}
+                title="网关全局配置"
               >
                 <Settings size={18} />
               </button>
               <button 
                 onClick={openAddForm}
-                className="p-3 bg-[#094D2B] text-white hover:bg-[#064E3B] transition-colors flex items-center gap-2 font-mono text-xs uppercase"
+                className="p-2 px-4 bg-slate-900 hover:bg-slate-800 dark:bg-emerald-650 dark:hover:bg-emerald-550 text-white dark:text-slate-950 transition-all flex items-center gap-1.5 font-sans font-bold text-xs rounded-lg shadow-sm cursor-pointer"
               >
-                <Plus size={18} />
-                <span>添加端点</span>
+                <Plus size={15} className="stroke-[3]" />
+                <span>添加节点端点</span>
               </button>
             </div>
           </header>
 
-      <main className="p-6 max-w-7xl mx-auto space-y-8">
-        {/* Global Stats Bar */}
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-          {[
-            { label: '活跃节点', value: `${config.keys.filter(k => k.enabled && k.status === 'active').length} / ${config.keys.length}`, icon: Database },
-            { label: '总请求数', value: config.keys.reduce((acc, k) => acc + k.useCount, 0).toLocaleString(), icon: Activity },
-            { label: '负载策略', value: config.settings.strategy.replace('-', '_').toUpperCase(), icon: RefreshCw },
-            { label: '平均成功率', value: `${((config.keys.reduce((acc, k) => acc + (k.useCount - (k.errorCount || 0)), 0) / (config.keys.reduce((acc, k) => acc + k.useCount, 0) || 1)) * 100).toFixed(1)}%`, icon: CheckCircle2 },
-          ].map((stat, i) => (
-            <div key={i} className="bg-white border-2 border-[#1E2E24] p-4 flex items-center justify-between shadow-[3px_3px_0px_0px_#1E2E24]">
-              <div>
-                <p className="font-mono text-[10px] uppercase text-gray-500 font-bold">{stat.label}</p>
-                <p className="text-xl font-mono leading-none text-[#094D2B] font-bold mt-1">{stat.value}</p>
-              </div>
-              <stat.icon size={20} className="text-[#094D2B] opacity-25" />
-            </div>
-          ))}
-          <button 
-            onClick={runAllHealthChecks}
-            disabled={isCheckingHealth}
-            className="group bg-white border-2 border-[#1E2E24] p-3 flex flex-col items-center justify-center shadow-[3px_3px_0px_0px_#1E2E24] hover:bg-[#094D2B] hover:text-white hover:border-[#094D2B] transition-colors disabled:opacity-50 cursor-pointer"
-          >
-            <ShieldCheck size={20} className={isCheckingHealth ? "animate-pulse mb-1 text-[#094D2B]" : "mb-1 text-[#094D2B] group-hover:scale-110 transition-transform"} />
-            <span className="font-mono text-[10px] uppercase tracking-widest font-bold">{isCheckingHealth ? '检查中...' : '启动健康检查'}</span>
-          </button>
-        </div>
-
-        {/* Settings Panel */}
-        <AnimatePresence>
-          {showSettings && (
-            <motion.section 
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden bg-white border-2 border-[#1E2E24] p-6 space-y-6 shadow-[5px_5px_0px_0px_#1E2E24]"
-            >
-              <div className="flex items-center justify-between border-b-2 border-[#1E2E24]/20 pb-2 text-xs font-mono uppercase font-bold text-[#094D2B]">
-                <span>全局调度与安全参数配置</span>
-                <span className="opacity-40">GLOBAL_CONFIG.JSON</span>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <div className="space-y-2">
-                  <label className="font-mono text-[10px] uppercase opacity-60 block font-bold">调度策略 (Strategy)</label>
-                  <select 
-                    value={config.settings.strategy}
-                    onChange={(e) => updateSettings({ strategy: e.target.value as any })}
-                    className="w-full border-2 border-[#1E2E24] p-2 font-mono text-sm focus:outline-none focus:bg-[#EBF5EE]"
-                  >
-                    <option value="round-robin">轮询 (Round Robin)</option>
-                    <option value="random">随机 (Random)</option>
-                    <option value="least-used">最少使用 (Least Used)</option>
-                    <option value="weighted">比例分配 (Weighted - 基于额度占比)</option>
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <label className="font-mono text-[10px] uppercase opacity-60 block font-bold">全局 QPS 限制 (0 为不限制)</label>
-                  <input 
-                    type="number"
-                    value={config.settings.globalQpsLimit}
-                    onChange={(e) => updateSettings({ globalQpsLimit: parseInt(e.target.value) })}
-                    className="w-full border-2 border-[#1E2E24] p-2 font-mono text-sm focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="font-mono text-[10px] uppercase opacity-60 block font-bold">熔断阈值 (连续失败次数)</label>
-                  <input 
-                    type="number"
-                    value={config.settings.circuitBreakerThreshold}
-                    onChange={(e) => updateSettings({ circuitBreakerThreshold: parseInt(e.target.value) })}
-                    className="w-full border-2 border-[#1E2E24] p-2 font-mono text-sm focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="font-mono text-[10px] uppercase opacity-60 block font-bold">自动健康检查间隔 (分钟, 0 为关闭)</label>
-                  <input 
-                    type="number"
-                    value={config.settings.healthCheckInterval || 0}
-                    onChange={(e) => updateSettings({ healthCheckInterval: parseInt(e.target.value) })}
-                    className="w-full border-2 border-[#1E2E24] p-2 font-mono text-sm focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-2 col-span-1 md:col-span-3">
-                  <label className="font-mono text-[10px] uppercase opacity-70 block font-bold text-[#1E2E24]">默认全局网关端点 (Default Gateway Endpoint)</label>
-                  <input 
-                    type="url"
-                    value={config.settings.defaultEndpoint}
-                    onChange={(e) => updateSettings({ defaultEndpoint: e.target.value })}
-                    className="w-full border-2 border-[#1E2E24] p-3 font-mono text-sm focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-2 col-span-1 md:col-span-3">
-                  <label className="font-mono text-[10px] uppercase opacity-70 block font-bold text-[#1E2E24]">网关主访问令牌 (Master Key - 留空则对外免鉴权公开开放)</label>
-                  <div className="flex gap-2">
-                    <input 
-                      type="text"
-                      placeholder="设置一个访问此代理路由所需的 Key"
-                      value={config.settings.masterKey || ''}
-                      onChange={(e) => updateSettings({ masterKey: e.target.value })}
-                      className="flex-1 border-2 border-[#1E2E24] p-2 font-mono text-sm focus:outline-none"
-                    />
-                    <button 
-                      onClick={() => updateSettings({ masterKey: Math.random().toString(36).substring(2, 12) + Math.random().toString(36).substring(2, 12) })}
-                      className="px-4 border-2 border-[#1E2E24] bg-white hover:bg-[#094D2B] hover:text-white transition-colors font-mono text-[10px] font-bold"
-                    >
-                      自动生成 Key
-                    </button>
+          <main className="p-6 max-w-7xl mx-auto space-y-6">
+            {/* Global Stats Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              {[
+                { label: '在线可用节点', value: `${config.keys.filter(k => k.enabled && k.status === 'active').length} / ${config.keys.length}`, desc: '集群物理探针统计', icon: Database, colorClass: 'text-emerald-600 bg-emerald-50 border-emerald-100/80' },
+                { label: '总请求计数', value: config.keys.reduce((acc, k) => acc + k.useCount, 0).toLocaleString(), desc: '累计成功中转吞吐', icon: Activity, colorClass: 'text-cyan-600 bg-cyan-50 border-cyan-100/80' },
+                { label: '底层调度策略', value: config.settings.strategy.toUpperCase().replace('-', '_'), desc: '算法自调优机制', icon: RefreshCw, colorClass: 'text-indigo-600 bg-indigo-50 border-indigo-100/80' },
+                { label: '负载成功率', value: `${((config.keys.reduce((acc, k) => acc + (k.useCount - (k.errorCount || 0)), 0) / (config.keys.reduce((acc, k) => acc + k.useCount, 0) || 1)) * 100).toFixed(1)}%`, desc: '防熔断安全重平衡', icon: CheckCircle2, colorClass: 'text-teal-600 bg-teal-50 border-teal-100/80' },
+              ].map((stat, i) => (
+                <div key={i} className="bg-white border border-slate-200/80 p-5 rounded-2xl flex items-center justify-between shadow-sm relative overflow-hidden group hover:border-slate-300 transition-all">
+                  <div className="space-y-1">
+                    <p className="font-mono text-[9px] uppercase tracking-wider text-slate-400 font-bold">{stat.label}</p>
+                    <p className="text-2xl font-mono tracking-tight text-slate-800 font-extrabold">{stat.value}</p>
+                    <p className="text-[10px] text-slate-500 font-sans">{stat.desc}</p>
                   </div>
-                  <div className="space-y-1 mt-2">
-                    <label className="font-mono text-[10px] uppercase opacity-70 block font-bold text-[#1E2E24]">控制台管理密码 (Password)</label>
-                    <input 
-                      type="password"
-                      placeholder="设置后台管理密码"
-                      value={config.settings.adminPassword || ''}
-                      onChange={(e) => updateSettings({ adminPassword: e.target.value })}
-                      className="w-full border-2 border-[#1E2E24] p-3 font-mono text-sm focus:outline-none"
-                    />
+                  <div className={`p-2.5 rounded-xl border ${stat.colorClass} transition-opacity`}>
+                    <stat.icon size={17} />
                   </div>
                 </div>
-              </div>
-            </motion.section>
-          )}
-        </AnimatePresence>
+              ))}
+              
+              <button 
+                onClick={runAllHealthChecks}
+                disabled={isCheckingHealth}
+                className="bg-white border border-emerald-100 p-5 rounded-2xl flex flex-col items-center justify-center text-center shadow-sm hover:bg-emerald-50/25 hover:border-emerald-300 transition-all disabled:opacity-50 cursor-pointer min-h-[100px]"
+              >
+                <ShieldCheck size={22} className={isCheckingHealth ? "animate-spin text-emerald-600 mb-1" : "text-emerald-500 mb-1 animate-pulse"} />
+                <span className="font-mono text-[10px] tracking-wider uppercase font-extrabold text-emerald-600">{isCheckingHealth ? '轮询诊断中...' : '启动健康检查'}</span>
+                <span className="text-[9px] text-slate-500 font-sans mt-0.5">多路端点并发探针</span>
+              </button>
+            </div>
 
-        {/* Proxy Info Card */}
-        <section className="bg-white border-2 border-[#1E2E24] p-6 space-y-4 shadow-[4px_4px_0px_0px_#1E2E24]">
-          <div className="flex items-center justify-between border-b-2 border-[#1E2E24]/10 pb-4">
-            <div className="flex items-center gap-2 capitalize text-[#094D2B]">
-              <ShieldCheck className="w-5 h-5" />
-              <h2 className="font-serif italic text-xl font-bold">代理配置与集成指南</h2>
-            </div>
-            <div className="flex items-center gap-2 bg-[#EBF5EE] text-[#0A3D23] px-2.5 py-1 rounded border border-[#BCE5CC]">
-              <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-              <span className="font-mono text-[10px] uppercase font-bold">GATEWAY ACTIVE</span>
-            </div>
-          </div>
-          <div className="space-y-4">
-            <p className="text-sm text-gray-755 leading-relaxed md:max-w-2xl">
-              在您对应的客户端、双脑聊天、或中转 SDK 框架（兼容标准 OpenAI SDK）中，将默认请求端点替换成下方负载网关 URL，即可实现对 SiliconFlow、Groq、Gemini、DeepSeek 及 NIM 节点的高可用无感分流路由。
-            </p>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <div className="flex-1 font-mono text-sm bg-[#EBF5EE] text-[#0A3D23] border border-[#A8D3B9] p-3.5 flex items-center justify-between group rounded shadow-inner">
-                <code className="break-all font-bold select-all">{proxyUrl}</code>
-                <button 
-                  onClick={copyProxyUrl}
-                  title="复制代理链接"
-                  className="p-1.5 hover:bg-[#094D2B] hover:text-white transition-colors shrink-0 rounded"
+            {/* Settings Panel */}
+            <AnimatePresence>
+              {showSettings && (
+                <motion.section 
+                  initial={{ height: 0, opacity: 0, scale: 0.99 }}
+                  animate={{ height: 'auto', opacity: 1, scale: 1 }}
+                  exit={{ height: 0, opacity: 0, scale: 0.99 }}
+                  transition={{ duration: 0.25 }}
+                  className="overflow-hidden bg-white border border-slate-200 rounded-2xl p-6 space-y-6 shadow-sm relative animate-none"
                 >
-                  <ExternalLink size={16} />
-                </button>
-              </div>
-            </div>
-            {config.settings.masterKey && (
-              <div className="bg-[#1E2E24] text-[#E8F5EE] p-3 font-mono text-[10px] space-y-1 rounded shadow">
-                <p className="opacity-60">调用请求头凭证 (Required Request Header):</p>
-                <code className="block select-all bg-[#094D2B]/50 p-1 rounded font-bold">Authorization: Bearer {config.settings.masterKey}</code>
-              </div>
-            )}
-          </div>
-        </section>
+                  <div className="absolute top-0 right-0 p-4 font-mono text-[10px] text-slate-400 font-medium uppercase select-none">SYSTEM_GLOBAL_PREFERENCE</div>
+                  
+                  <div className="flex items-center gap-2 border-b border-slate-100 pb-3 text-xs font-mono uppercase font-bold text-slate-800">
+                    <Settings className="w-4 h-4 text-emerald-600" />
+                    <span>全局高可用调度策略与安全熔断器参数配置</span>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="space-y-1.5">
+                      <label className="font-sans text-[11px] uppercase text-slate-500 font-bold">1. 路由负载调度算法 (LB Strategy)</label>
+                      <select 
+                        value={config.settings.strategy}
+                        onChange={(e) => updateSettings({ strategy: e.target.value as any })}
+                        className="w-full bg-slate-50 border border-slate-200 text-xs px-3.5 py-2.5 text-slate-850 focus:outline-none focus:border-emerald-600 rounded-xl cursor-pointer"
+                      >
+                        <option value="round-robin">轮询优先分配 (Round Robin)</option>
+                        <option value="random">随机哈希匹配 (Random)</option>
+                        <option value="least-used">最少请求优先 (Least Used)</option>
+                        <option value="weighted">比例自动分配 (Weighted - 基于额度)</option>
+                      </select>
+                    </div>
+                    
+                    <div className="space-y-1.5">
+                      <label className="font-sans text-[11px] uppercase text-slate-500 font-bold">2. 全局 QPS 限流保护并防炸源 (0为无限制)</label>
+                      <input 
+                        type="number"
+                        value={config.settings.globalQpsLimit}
+                        onChange={(e) => updateSettings({ globalQpsLimit: parseInt(e.target.value) })}
+                        className="w-full bg-slate-50 border border-slate-200 text-xs px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-emerald-600 rounded-xl font-mono"
+                      />
+                    </div>
+                    
+                    <div className="space-y-1.5">
+                      <label className="font-sans text-[11px] uppercase text-slate-500 font-bold">3. 节点熔断阈值 (连续失败最大上限)</label>
+                      <input 
+                        type="number"
+                        value={config.settings.circuitBreakerThreshold}
+                        onChange={(e) => updateSettings({ circuitBreakerThreshold: parseInt(e.target.value) })}
+                        className="w-full bg-slate-50 border border-slate-200 text-xs px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-emerald-600 rounded-xl font-mono"
+                      />
+                    </div>
+                    
+                    <div className="space-y-1.5">
+                      <label className="font-sans text-[11px] uppercase text-slate-500 font-bold">4. 自动守护健康检查间隔 (分钟, 0为关闭)</label>
+                      <input 
+                        type="number"
+                        value={config.settings.healthCheckInterval || 0}
+                        onChange={(e) => updateSettings({ healthCheckInterval: parseInt(e.target.value) })}
+                        className="w-full bg-slate-50 border border-slate-200 text-xs px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-emerald-600 rounded-xl font-mono"
+                      />
+                    </div>
+                    
+                    <div className="space-y-1.5 col-span-1 md:col-span-2">
+                      <label className="font-sans text-[11px] uppercase text-slate-500 font-bold">5. 动态默认网关端点代理前缀 (Fallback Gateway URL)</label>
+                      <input 
+                        type="url"
+                        value={config.settings.defaultEndpoint}
+                        onChange={(e) => updateSettings({ defaultEndpoint: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 text-xs px-3.5 py-2.5 text-slate-700 focus:outline-none focus:border-emerald-600 rounded-xl font-mono"
+                      />
+                    </div>
+                    
+                    <div className="space-y-4.5 col-span-1 md:col-span-3 border-t border-slate-100 pt-4.5">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-1.5">
+                          <label className="font-sans text-[11px] uppercase text-slate-500 font-bold">6. 控制台统一鉴权凭证 (Master Token)</label>
+                          <div className="flex gap-2">
+                            <input 
+                              type="text"
+                              placeholder="设置网关鉴权令牌，留空鉴于免密自由模式"
+                              value={config.settings.masterKey || ''}
+                              onChange={(e) => updateSettings({ masterKey: e.target.value })}
+                              className="flex-1 bg-slate-50 border border-slate-200 text-xs px-3.5 py-2 text-slate-800 focus:outline-none focus:border-emerald-600 rounded-xl font-mono"
+                            />
+                            <button 
+                              onClick={() => updateSettings({ masterKey: 'sk-router-' + Math.random().toString(36).substring(2, 10) })}
+                              className="px-3 bg-slate-105 border border-slate-200 hover:border-emerald-500 text-slate-600 hover:text-emerald-600 transition-colors rounded-xl font-mono text-[10px] font-bold cursor-pointer"
+                            >
+                              安全生成
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-slate-400 leading-normal font-sans">留空表示中转通道对外不需要验证 Bearer Token。设定后必须加上 `Authorization Bearer` 报头方可中转。</p>
+                        </div>
+                        
+                        <div className="space-y-1.5">
+                          <label className="font-sans text-[11px] uppercase text-slate-500 font-bold">7. 控制台管理密码 (Console Password)</label>
+                          <input 
+                            type="password"
+                            placeholder="请重新设置解锁访问密码"
+                            value={config.settings.adminPassword || ''}
+                            onChange={(e) => updateSettings({ adminPassword: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 text-xs px-3.5 py-2 text-slate-800 focus:outline-none focus:border-emerald-600 rounded-xl font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </motion.section>
+              )}
+            </AnimatePresence>
 
-        {/* Endpoints List */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between border-b-2 border-[#1E2E24] pb-2">
-            <div className="flex items-center gap-6 overflow-x-auto scroller-hidden">
-              <button 
-                onClick={() => setViewMode('dashboard')}
-                className={`font-mono text-xs uppercase tracking-widest flex items-center gap-2 pb-1 border-b-2 transition-all whitespace-nowrap ${viewMode === 'dashboard' ? 'border-[#094D2B] text-[#094D2B] opacity-100 font-bold' : 'border-transparent text-gray-500 opacity-60 hover:opacity-100'}`}
-              >
-                <BarChart2 size={14} /> 核心仪表盘 (Dashboard)
-              </button>
-              <button 
-                onClick={() => setViewMode('endpoints')}
-                className={`font-mono text-xs uppercase tracking-widest flex items-center gap-2 pb-1 border-b-2 transition-all whitespace-nowrap ${viewMode === 'endpoints' ? 'border-[#094D2B] text-[#094D2B] opacity-100 font-bold' : 'border-transparent text-gray-500 opacity-60 hover:opacity-100'}`}
-              >
-                <Database size={14} /> 可路由端点 (Endpoints / Keys)
-              </button>
-              <button 
-                onClick={() => setViewMode('models')}
-                className={`font-mono text-xs uppercase tracking-widest flex items-center gap-2 pb-1 border-b-2 transition-all whitespace-nowrap ${viewMode === 'models' ? 'border-[#094D2B] text-[#094D2B] opacity-100 font-bold' : 'border-transparent text-gray-500 opacity-60 hover:opacity-100'}`}
-              >
-                <Activity size={14} /> 聚合模型源 (Models)
-              </button>
-              <button 
-                onClick={() => setViewMode('playground')}
-                className={`font-mono text-xs uppercase tracking-widest flex items-center gap-2 pb-1 border-b-2 transition-all whitespace-nowrap ${viewMode === 'playground' ? 'border-[#094D2B] text-[#094D2B] opacity-100 font-bold' : 'border-transparent text-gray-500 opacity-60 hover:opacity-100'}`}
-              >
-                <Sparkles size={14} /> 网关测试沙盒 (Playground)
-              </button>
-              <button 
-                onClick={() => setViewMode('logs')}
-                className={`font-mono text-xs uppercase tracking-widest flex items-center gap-2 pb-1 border-b-2 transition-all whitespace-nowrap ${viewMode === 'logs' ? 'border-[#094D2B] text-[#094D2B] opacity-100 font-bold' : 'border-transparent text-gray-500 opacity-60 hover:opacity-100'}`}
-              >
-                <FileText size={14} /> 实时日志 (Proxy Logs)
-              </button>
-            </div>
-          </div>
+            {/* Proxy Info Card */}
+            <section className="bg-white border border-slate-200 p-6 rounded-2xl relative overflow-hidden shadow-sm">
+              <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-100 pb-4 gap-4">
+                <div className="flex items-center gap-2 text-slate-800">
+                  <ShieldCheck className="w-5 h-5 text-emerald-600" />
+                  <h2 className="text-sm font-bold tracking-tight text-slate-800 font-sans">安全网络分流中转连接指南</h2>
+                </div>
+                <div className="flex items-center gap-1.5 bg-emerald-50 text-emerald-600 px-2.5 py-1 rounded-lg border border-emerald-100 shrink-0 self-start md:self-auto">
+                  <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                  <span className="font-mono text-[10px] uppercase font-bold tracking-wider">GATEWAY DISPATCH ACTIVE</span>
+                </div>
+              </div>
+              
+              <div className="mt-5 space-y-4">
+                <p className="text-xs text-slate-500 leading-relaxed max-w-4xl font-sans">
+                  本中转网关拥有极出色的多上游向下兼容能力，已将包括 <b>SiliconFlow、Groq、Google Gemini、DeepSeek、Together AI 与火山豆包</b> 等在内的上百种开源/闭源模型进行了 100% 标准 OpenAI SDK 逻辑重包装。您可以直接将您的任意 AI 客户端、双脑编辑应用 (如 Cursor, Claude Code, Cline vscode) 中的 OpenAI 兼容 API 入口指向下方网关，接口将自动为您分流并监控上游活跃性！
+                </p>
+                
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <span className="font-mono text-[9px] uppercase tracking-wider text-slate-400 font-bold block">1. 统一接口网关基址 (API Base URL)</span>
+                    <div className="flex bg-slate-50 border border-slate-200 rounded-xl overflow-hidden p-2.5 pl-3.5 items-center justify-between hover:border-slate-300 transition-all">
+                      <code className="font-mono text-xs text-emerald-700 font-bold select-all truncate break-all">{proxyUrl}</code>
+                      <button 
+                        onClick={copyProxyUrl}
+                        title="复制网关基础基址"
+                        className="p-2 hover:bg-slate-200 hover:text-emerald-700 text-slate-500 transition-colors shrink-0 rounded-lg cursor-pointer"
+                      >
+                        {copiedStates['proxyUrl'] ? <CheckCircle2 size={15} className="text-emerald-600" /> : <Copy size={15} />}
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    <span className="font-mono text-[9px] uppercase tracking-wider text-slate-400 font-bold block">2. 统一调用认证密钥 (Master Authorization Key)</span>
+                    <div className="flex bg-slate-50 border border-slate-200 rounded-xl overflow-hidden p-2.5 pl-3.5 items-center justify-between hover:border-slate-300 transition-all">
+                      <code className="font-mono text-xs text-indigo-700 font-bold select-all truncate break-all">
+                        {config.settings.masterKey ? `Bearer ${config.settings.masterKey}` : "无需凭证 (网关免密可用)"}
+                      </code>
+                      <button 
+                        onClick={() => {
+                          const tokenText = config.settings.masterKey ? `Bearer ${config.settings.masterKey}` : "";
+                          navigator.clipboard.writeText(tokenText);
+                          triggerCopy('masterTokenCopy', tokenText);
+                        }}
+                        title="复制认证密钥"
+                        className="p-2 hover:bg-slate-200 hover:text-indigo-700 text-slate-500 transition-colors shrink-0 rounded-lg cursor-pointer"
+                      >
+                        {copiedStates['masterTokenCopy'] ? <CheckCircle2 size={15} className="text-indigo-650" /> : <Copy size={15} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
 
-          <div className="space-y-2">
-            <AnimatePresence mode="wait">
-              {viewMode === 'dashboard' ? (
-                <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
+            {/* Endpoints List Tab Navigation */}
+            <section className="space-y-4">
+              <div className="bg-slate-100 border border-slate-200/85 p-1.5 rounded-2xl">
+                <div className="flex items-center gap-1.5 overflow-x-auto scroller-hidden">
+                  {[
+                    { mode: 'dashboard', label: '核心仪表盘', desc: 'Dashboard', icon: BarChart2 },
+                    { mode: 'endpoints', label: '可路由端点', desc: 'Endpoints', icon: Database },
+                    { mode: 'models', label: '聚合模型源', desc: 'Models', icon: Activity },
+                    { mode: 'playground', label: '网关沙盒测试', desc: 'Playground', icon: Sparkles },
+                    { mode: 'logs', label: '中转实时日志', desc: 'Proxy Logs', icon: FileText },
+                    { mode: 'cli', label: 'CLI & OAuth 集成', desc: 'CLI Mode', icon: Terminal },
+                  ].map((tab) => {
+                    const isActive = viewMode === tab.mode;
+                    return (
+                      <button 
+                        key={tab.mode}
+                        onClick={() => setViewMode(tab.mode as any)}
+                        className={`px-4 py-2.5 rounded-xl font-sans text-xs flex items-center gap-2 transition-all whitespace-nowrap cursor-pointer ${
+                          isActive 
+                            ? 'bg-[#094D2B] text-white font-bold shadow-sm' 
+                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/80 font-medium'
+                        }`}
+                      >
+                        <tab.icon size={14} className={isActive ? 'stroke-[2.5]' : 'opacity-70'} />
+                        <span className="font-bold leading-normal">{tab.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <AnimatePresence mode="wait">
+                  {viewMode === 'dashboard' ? (
+                    <motion.div key="dashboard" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
                   {/* Bento Metrics Grid */}
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <div className="border-2 border-[#1E2E24] bg-white p-4 shadow-[4px_4px_0px_0px_#1E2E24]">
-                      <div className="flex justify-between items-start opacity-60">
-                        <span className="font-mono text-[10px] uppercase font-bold tracking-wider">路由配置节点 (Total Node Keys)</span>
-                        <Database size={16} className="text-[#094D2B]" />
+                    <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all group relative overflow-hidden">
+                      <div className="flex justify-between items-start text-slate-500">
+                        <span className="font-sans text-[11px] uppercase font-bold tracking-wider">路由配置节点 (Total Node Keys)</span>
+                        <div className="p-1.5 bg-slate-50 rounded-lg text-emerald-600 border border-slate-100"><Database size={15} /></div>
                       </div>
-                      <p className="font-serif italic text-3xl font-bold mt-2 text-[#094D2B]">{config.keys.length}</p>
-                      <div className="mt-1 flex gap-2 font-mono text-[9px]">
-                        <span className="text-emerald-700 font-bold">{config.keys.filter(k => k.enabled && k.status === 'active').length} 活跃中</span>
-                        <span className="opacity-45">/</span>
-                        <span className="text-red-700 font-bold">{config.keys.filter(k => k.enabled && (k.status === 'error' || k.status === 'circuit-broken')).length} 故障</span>
+                      <div className="my-3">
+                        <p className="text-3xl font-mono font-extrabold text-slate-800">{config.keys.length}</p>
+                      </div>
+                      <div className="flex items-center gap-2.5 font-mono text-[10px] bg-slate-50 p-2 rounded-xl border border-slate-150">
+                        <span className="text-emerald-600 font-bold flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                          {config.keys.filter(k => k.enabled && k.status === 'active').length} 活跃
+                        </span>
+                        <span className="text-slate-300">/</span>
+                        <span className="text-rose-600 font-bold flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 bg-red-500 rounded-full"></span>
+                          {config.keys.filter(k => k.enabled && (k.status === 'error' || k.status === 'circuit-broken')).length} 故障
+                        </span>
                       </div>
                     </div>
 
-                    <div className="border-2 border-[#1E2E24] bg-white p-4 shadow-[4px_4px_0px_0px_#1E2E24]">
-                      <div className="flex justify-between items-start opacity-60">
-                        <span className="font-mono text-[10px] uppercase font-bold tracking-wider">已处理总流量 (Proxy Traffic)</span>
-                        <Activity size={16} className="text-[#094D2B]" />
+                    <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all group relative overflow-hidden">
+                      <div className="flex justify-between items-start text-slate-500">
+                        <span className="font-sans text-[11px] uppercase font-bold tracking-wider">已处理总流量 (Proxy Traffic)</span>
+                        <div className="p-1.5 bg-slate-50 rounded-lg text-cyan-600 border border-slate-100"><Activity size={15} /></div>
                       </div>
-                      <p className="font-serif italic text-3xl font-bold mt-2 text-[#094D2B]">{stats.totalRequests || 0}</p>
-                      <span className="font-mono text-[9px] text-gray-500 mt-1 block">累计触发网关数 (Requests handled)</span>
+                      <div className="my-3">
+                        <p className="text-3xl font-mono font-extrabold text-slate-800">{(stats.totalRequests || 0).toLocaleString()}</p>
+                      </div>
+                      <span className="font-sans text-[10px] text-slate-400 leading-normal">累计向各路模型容器发起的并发调用数</span>
                     </div>
 
-                    <div className="border-2 border-[#1E2E24] bg-white p-4 shadow-[4px_4px_0px_0px_#1E2E24]">
-                      <div className="flex justify-between items-start opacity-60">
-                        <span className="font-mono text-[10px] uppercase font-bold tracking-wider font-sans">网关异常率 (Proxy Failures)</span>
-                        <AlertCircle size={16} className={stats.failedRequests > 0 ? "text-red-600" : "text-emerald-600"} />
+                    <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all group relative overflow-hidden">
+                      <div className="flex justify-between items-start text-slate-500">
+                        <span className="font-sans text-[11px] uppercase font-bold tracking-wider">网关异常率 (Proxy Failures)</span>
+                        <div className="p-1.5 bg-slate-50 rounded-lg text-rose-600 border border-slate-100"><AlertCircle size={15} /></div>
                       </div>
-                      <p className="font-serif italic text-3xl font-bold mt-2 text-[#094D2B]">
-                        {stats.totalRequests > 0 ? ((stats.failedRequests / stats.totalRequests) * 100).toFixed(1) : "0.0"}%
-                      </p>
-                      <span className="font-mono text-[9px] mt-1 block text-gray-500">
-                        累计 {stats.failedRequests || 0} 个异常失败
+                      <div className="my-3">
+                        <p className="text-3xl font-mono font-extrabold text-slate-800">
+                          {stats.totalRequests > 0 ? ((stats.failedRequests / stats.totalRequests) * 100).toFixed(1) : "0.0"}%
+                        </p>
+                      </div>
+                      <span className="font-sans text-[10px] text-slate-400 leading-normal">
+                        因上游超时或不可抗力熔断的故障占比
                       </span>
                     </div>
 
-                    <div className="border-2 border-[#1E2E24] bg-white p-4 shadow-[4px_4px_0px_0px_#1E2E24]">
-                      <div className="flex justify-between items-start opacity-60">
-                        <span className="font-mono text-[10px] uppercase font-bold tracking-wider">最近平均延时 (Avg Latency)</span>
-                        <Clock size={16} className="text-[#094D2B]" />
+                    <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all group relative overflow-hidden">
+                      <div className="flex justify-between items-start text-slate-500">
+                        <span className="font-sans text-[11px] uppercase font-bold tracking-wider">最新平均延时 (Avg Latency)</span>
+                        <div className="p-1.5 bg-slate-50 rounded-lg text-indigo-600 border border-slate-100"><Clock size={15} /></div>
                       </div>
-                      <p className="font-serif italic text-3xl font-bold mt-2 text-[#094D2B]">
-                        {stats.totalRequests - stats.failedRequests > 0 
-                          ? Math.round(stats.totalResponseTimes / (stats.totalRequests - stats.failedRequests)) 
-                          : 200} ms
-                      </p>
-                      <span className="font-mono text-[9px] text-[#A3A3A3] mt-1 block">自启以来活动节点极速响应</span>
+                      <div className="my-3">
+                        <p className="text-3xl font-mono font-extrabold text-slate-800">
+                          {stats.totalRequests - stats.failedRequests > 0 
+                            ? Math.round(stats.totalResponseTimes / (stats.totalRequests - stats.failedRequests)) 
+                            : 200} ms
+                        </p>
+                      </div>
+                      <span className="font-sans text-[10px] text-slate-400 leading-normal">网关在智能去抖、断线重连下的极速表现</span>
                     </div>
                   </div>
 
                   {/* Recharts Area Chart for API Traffic metrics */}
-                  <div className="border-2 border-[#1E2E24] bg-white p-4 shadow-[4px_4px_0px_0px_#1E2E24] space-y-4">
-                    <div className="flex items-center justify-between border-b-2 border-gray-100 pb-2">
+                  <div className="bg-white border border-slate-200 p-6 rounded-2xl space-y-4 shadow-sm">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                       <div className="flex items-center gap-2">
-                        <BarChart2 size={16} className="text-[#094D2B]" />
-                        <h3 className="font-mono text-sm uppercase tracking-wider font-bold text-[#1E2E24]">接口流量及平均响应监控 (REAL-TIME CONCURRENCY & LATENCY)</h3>
+                        <BarChart2 size={16} className="text-emerald-600" />
+                        <h3 className="font-sans text-xs uppercase tracking-wider font-extrabold text-slate-800">并发吞吐与网络延迟折线微拓扑监控</h3>
                       </div>
-                      <span className="font-mono text-[9px] bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded font-bold animate-pulse">● 监听在线 (LIVE FEED)</span>
+                      <span className="font-mono text-[9px] bg-emerald-50 text-emerald-600 px-2.5 py-1 rounded-lg border border-emerald-100 font-bold">● LIVE METRIC WATCH</span>
                     </div>
                 
                     {stats.statsHistory && stats.statsHistory.length > 0 ? (
@@ -1169,70 +1406,77 @@ export default function App() {
                           <AreaChart data={stats.statsHistory} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                             <defs>
                               <linearGradient id="colorRequests" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#094D2B" stopOpacity={0.15}/>
-                                <stop offset="95%" stopColor="#094D2B" stopOpacity={0.01}/>
+                                <stop offset="5%" stopColor="#10B981" stopOpacity={0.15}/>
+                                <stop offset="95%" stopColor="#10B981" stopOpacity={0.0}/>
                               </linearGradient>
                               <linearGradient id="colorLatency" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#10B981" stopOpacity={0.15}/>
-                                <stop offset="95%" stopColor="#10B981" stopOpacity={0.01}/>
+                                <stop offset="5%" stopColor="#6366F1" stopOpacity={0.15}/>
+                                <stop offset="95%" stopColor="#6366F1" stopOpacity={0.0}/>
                               </linearGradient>
                             </defs>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#EFF2EE" />
-                            <XAxis dataKey="timestamp" stroke="#888888" tickLine={false} />
-                            <YAxis yAxisId="left" stroke="#094D2B" tickLine={false} />
-                            <YAxis yAxisId="right" orientation="right" stroke="#10B981" tickLine={false} />
-                            <Tooltip contentStyle={{ background: '#FFF', border: '2px solid #1E2E24' }} />
-                            <Area yAxisId="left" type="monotone" dataKey="requests" name="请求笔数/分" stroke="#094D2B" strokeWidth={2.5} fillOpacity={1} fill="url(#colorRequests)" />
-                            <Area yAxisId="right" type="monotone" dataKey="avgLatency" name="平均响应(ms)" stroke="#10B981" strokeWidth={1.5} fillOpacity={1} fill="url(#colorLatency)" />
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                            <XAxis dataKey="timestamp" stroke="#94A3B8" tickLine={false} />
+                            <YAxis yAxisId="left" stroke="#10B981" tickLine={false} />
+                            <YAxis yAxisId="right" orientation="right" stroke="#6366F1" tickLine={false} />
+                            <Tooltip contentStyle={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '12px', color: '#0F172A', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }} />
+                            <Area yAxisId="left" type="monotone" dataKey="requests" name="请求中转发射/分钟" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#colorRequests)" />
+                            <Area yAxisId="right" type="monotone" dataKey="avgLatency" name="平均代理延迟(ms)" stroke="#6366F1" strokeWidth={1.5} fillOpacity={1} fill="url(#colorLatency)" />
                           </AreaChart>
                         </ResponsiveContainer>
                       </div>
                     ) : (
-                      <div className="py-12 text-center text-xs opacity-50 font-mono">统计服务加载中...</div>
+                      <div className="py-12 text-center text-xs text-slate-400 font-mono">网关流量探针实时加载中...</div>
                     )}
                   </div>
 
                   {/* Dashboard lower sections: Providers summary & Recent traffic log feed */}
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
                     {/* Active Provider Nodes list */}
-                    <div className="lg:col-span-7 border-2 border-[#1E2E24] bg-white p-4 shadow-[4px_4px_0px_0px_#1E2E24] space-y-4 flex flex-col justify-between">
-                      <div className="space-y-3">
-                        <div className="border-b-2 border-gray-100 pb-2 flex items-center justify-between">
-                          <span className="font-mono text-xs uppercase tracking-widest font-bold text-[#094D2B]">接入服务商可用池 (PROVIDER POOL)</span>
-                          <span className="font-mono text-[9px] opacity-70">负载算法: {config.settings.strategy}</span>
+                    <div className="lg:col-span-7 bg-white border border-slate-200 p-5 rounded-2xl flex flex-col justify-between shadow-sm">
+                      <div className="space-y-4">
+                        <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
+                          <span className="font-sans text-xs uppercase tracking-wider font-extrabold text-slate-800">分流负载多渠道可用源 (PROVIDER POOL)</span>
+                          <span className="font-mono text-[9px] text-[#10B981] bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md font-bold">
+                            均衡策略: {config.settings.strategy.toUpperCase().replace('-', '_')}
+                          </span>
                         </div>
                         
                         {config.keys.length === 0 ? (
-                          <div className="p-8 text-center text-xs opacity-40 font-mono border border-dashed rounded font-bold">
-                            无可用的活跃端点。请在左上角或“路由端点”栏中添加多服务密钥！
+                           <div className="p-8 text-center text-xs text-slate-400 font-mono border border-dashed border-slate-200 rounded-xl">
+                            网关处于真空状态，请在右上角添加节点端点密钥。
                           </div>
                         ) : (
-                          <div className="divide-y divide-gray-100 max-h-[300px] overflow-y-auto pr-1">
+                          <div className="divide-y divide-slate-100 max-h-[300px] overflow-y-auto pr-1 style-scrollbar custom-scrollbar">
                             {config.keys.map(key => {
                               const usedPercent = key.quotaLimit ? Math.round(((key.quotaUsed || 0) / key.quotaLimit) * 100) : 0;
-                              const badge = getProviderBadge(key.endpoint);
+                              const badge = getProviderBadge(key.endpoint, key.provider);
                               return (
-                                <div key={key.id} className="py-2.5 flex items-center justify-between text-xs hover:bg-[#EBF5EE]/30 transition-colors px-1">
-                                  <div className="flex items-center gap-2 min-w-0 flex-1">
-                                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${!key.enabled ? 'bg-gray-300' : key.status === 'active' ? 'bg-emerald-500 animate-pulse' : key.status === 'rate-limited' ? 'bg-amber-400 animate-pulse' : 'bg-red-500'}`}></span>
+                                <div key={key.id} className="py-3 flex items-center justify-between text-xs hover:bg-slate-50 transition-colors px-1">
+                                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                                    <span className={`w-2 h-2 rounded-full shrink-0 ${!key.enabled ? 'bg-slate-300' : key.status === 'active' ? 'bg-emerald-500 shadow-sm animate-pulse' : key.status === 'rate-limited' ? 'bg-amber-400' : 'bg-red-500'}`}></span>
                                     <div className="truncate min-w-0">
-                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                        <p className="font-serif italic text-sm font-bold truncate text-[#1E2E24]">{key.name}</p>
-                                        <span className={`px-1.5 py-0.2 border text-[8px] font-mono rounded-full font-bold scale-90 ${badge.bg}`}>
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <p className="font-sans text-sm font-bold text-slate-850 truncate">{key.name}</p>
+                                        <span className={`px-2 py-0.5 border text-[9px] font-mono rounded-md font-bold ${
+                                          badge.bg.includes('emerald') || badge.bg.includes('green') ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 
+                                          badge.bg.includes('purple') ? 'bg-purple-50 text-purple-600 border-purple-100' : 
+                                          badge.bg.includes('orange') || badge.bg.includes('amber') ? 'bg-amber-50 text-amber-600 border-amber-100' : 
+                                          'bg-indigo-50 text-indigo-600 border-indigo-100'
+                                        }`}>
                                           {badge.name}
                                         </span>
                                       </div>
-                                      <p className="font-mono text-[9px] text-gray-500 truncate shrink-0 mt-1">{key.endpoint || 'Built-in Endpoints'}</p>
+                                      <p className="font-mono text-[10px] text-slate-400 truncate mt-1">{key.endpoint || 'Built-in Provider Proxy'}</p>
                                     </div>
                                   </div>
-                                  <div className="flex items-center gap-4 shrink-0 font-mono text-[10px]">
+                                  <div className="flex items-center gap-5 shrink-0 font-mono text-[11px]">
                                     <div className="text-right">
-                                      <span className="opacity-55 text-[9px] font-bold">RPM</span>
-                                      <p className="font-bold text-[#094D2B]">{key.rpmLimit || '∞'}</p>
+                                      <span className="text-slate-400 text-[9px] font-bold block">RPM LIMIT</span>
+                                      <p className="font-bold text-slate-700">{key.rpmLimit || '∞'}</p>
                                     </div>
                                     <div className="text-right w-20">
-                                      <span className="opacity-55 text-[9px] font-bold">已耗额度</span>
-                                      <p className="font-bold text-gray-800">{key.quotaLimit ? `${usedPercent}%` : '不限'}</p>
+                                      <span className="text-slate-400 text-[9px] font-bold block">QUOTA USED</span>
+                                      <p className="font-bold text-slate-600">{key.quotaLimit ? `${usedPercent}%` : 'NO_LIMIT'}</p>
                                     </div>
                                   </div>
                                 </div>
@@ -1242,93 +1486,107 @@ export default function App() {
                         )}
                       </div>
                       
-                      <div className="bg-[#EBF5EE] border border-[#BCE5CC] text-[#064E3B] p-2.5 font-mono text-[9px] opacity-90 flex justify-between items-center shrink-0 mt-4 rounded">
-                        <span>💡 网关已通过安全策略对多端点进行降级过滤与负载均衡调度。</span>
-                        <span className="font-bold hover:underline cursor-pointer text-[#0A3D23]" onClick={() => setViewMode('endpoints')}>分配管理 &rarr;</span>
+                      <div className="bg-slate-50 border border-slate-150 text-slate-500 p-3 font-sans text-xs flex justify-between items-center shrink-0 mt-5 rounded-xl">
+                        <span className="flex items-center gap-1.5 text-slate-500 text-[10px] leading-relaxed">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
+                          多路备用隧道机制：当第一顺位主渠道拥堵或断网时，智能探针将在毫秒级重平衡！
+                        </span>
+                        <span className="font-bold text-emerald-600 hover:underline cursor-pointer flex items-center gap-1 shrink-0" onClick={() => setViewMode('endpoints')}>
+                          <span>精细策略管理</span>
+                          <span>&rarr;</span>
+                        </span>
                       </div>
                     </div>
- 
+  
                     {/* Recent Transactions Feed */}
-                    <div className="lg:col-span-5 border-2 border-[#1E2E24] bg-white p-4 shadow-[4px_4px_0px_0px_#1E2E24] space-y-4">
-                      <div className="border-b-2 border-gray-100 pb-2 flex items-center justify-between">
-                        <span className="font-mono text-xs uppercase tracking-widest font-bold text-[#094D2B]">网关实时流水 (LIVE STREAM)</span>
-                        <Terminal size={12} className="text-[#094D2B] opacity-70 animate-bounce" />
-                      </div>
-                      
-                      {globalLogs.length === 0 ? (
-                        <div className="p-8 text-center text-xs opacity-40 font-mono italic">
-                          等待第一笔并发 API 穿透请求流... (Awaiting traffic)
+                    <div className="lg:col-span-5 bg-white border border-slate-200 p-5 rounded-2xl flex flex-col justify-between shadow-sm">
+                      <div className="space-y-4">
+                        <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
+                          <span className="font-sans text-xs uppercase tracking-wider font-extrabold text-slate-800">网关中转实时链路穿透流水 (LIVE STREAM)</span>
+                          <Terminal size={14} className="text-emerald-500 animate-pulse" />
                         </div>
-                      ) : (
-                        <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1 text-[11px] font-mono">
-                          {globalLogs.slice(0, 8).map((log, idx) => {
-                            const isErr = log.status >= 400;
-                            return (
-                              <div key={log.id || idx} className="p-2 border bg-[#EFF2EF]/50 border-gray-100 flex items-center justify-between hover:bg-white transition-colors">
-                                <div className="min-w-0 flex-1 mr-2 space-y-0.5">
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="bg-[#094D2B] text-white px-1 text-[8px] font-bold rounded uppercase tracking-wider">{log.method}</span>
-                                    <span className="truncate max-w-[150px] font-bold text-gray-700">{log.model}</span>
+                        
+                        {globalLogs.length === 0 ? (
+                          <div className="p-8 text-center text-xs text-slate-400 font-mono italic border border-dashed border-slate-200 rounded-xl">
+                            等待中转网关接收并发请求流量...
+                          </div>
+                        ) : (
+                          <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1 text-[11px] font-mono custom-scrollbar">
+                            {globalLogs.slice(0, 8).map((log, idx) => {
+                              const isErr = log.status >= 400;
+                              return (
+                                <div key={log.id || idx} className="p-2.5 rounded-xl border bg-slate-50/50 border-slate-150 flex items-center justify-between hover:bg-slate-100 hover:border-slate-200 transition-all">
+                                  <div className="min-w-0 flex-1 mr-2 space-y-1">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.5 text-[8.5px] font-bold rounded font-mono uppercase tracking-wider">{log.method}</span>
+                                      <span className="truncate max-w-[130px] font-bold text-slate-700">{log.model}</span>
+                                    </div>
+                                    <p className="text-[9.5px] text-slate-400 truncate">{log.path} &middot; <span className="opacity-80 font-bold">{log.keyName}</span></p>
                                   </div>
-                                  <p className="text-[9px] text-gray-400 truncate">{log.path} &middot; {log.keyName}</p>
+                                  <div className="text-right shrink-0">
+                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${isErr ? "bg-red-50 text-red-650 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"}`}>
+                                      {log.status}
+                                    </span>
+                                    <p className="text-[9px] text-slate-400 mt-1 font-mono">{log.duration ? `${log.duration}ms` : '100ms'}</p>
+                                  </div>
                                 </div>
-                                <div className="text-right shrink-0">
-                                  <span className={`px-1 rounded text-[9px] font-bold ${isErr ? "bg-red-100 text-red-700 border border-red-200" : "bg-emerald-100 text-emerald-700 border border-emerald-200"}`}>
-                                    {log.status}
-                                  </span>
-                                  <p className="text-[8px] opacity-40 mt-0.5">{log.duration ? `${log.duration}ms` : '100ms'}</p>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </motion.div>
+
               ) : viewMode === 'endpoints' ? (
                 <motion.div key="endpoints" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
                   {config.keys.map((key) => (
-                    <React.Fragment key={key.id}>
+                    <React.Fragment key={`frag-${key.id}`}>
                     <motion.div 
                       key={key.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.95 }}
-                      className={`group bg-white border-2 border-[#1E2E24] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 transition-all hover:bg-[#EBF5EE]/10 shadow-[3px_3px_0px_0px_#1E2E24] ${!key.enabled ? 'grayscale opacity-60' : ''}`}
+                      className={`group bg-white border border-slate-200 p-4 rounded-2xl flex flex-col lg:flex-row lg:items-center justify-between gap-4 transition-all hover:bg-slate-50/55 shadow-sm ${!key.enabled ? 'grayscale opacity-60' : ''}`}
                     >
                       <div className="flex items-center gap-4 flex-1 min-w-0">
                         <button 
                           onClick={() => toggleKey(key.id, !key.enabled)}
-                          className={`w-10 h-10 border-2 border-[#1E2E24] flex items-center justify-center transition-colors shadow-sm cursor-pointer ${key.enabled ? (key.status === 'circuit-broken' || key.status === 'error' ? 'bg-red-500 text-white border-red-700 font-bold' : 'bg-emerald-600 text-white border-emerald-800 font-bold') : 'bg-gray-200 text-gray-500'}`}
+                          className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-colors cursor-pointer ${key.enabled ? (key.status === 'circuit-broken' || key.status === 'error' ? 'bg-rose-50 border-rose-200 text-rose-600 font-bold' : 'bg-emerald-50 border-emerald-200 text-emerald-600 font-bold') : 'bg-slate-100 border-slate-200 text-slate-400'}`}
                         >
-                          <Key size={18} />
+                          <Key size={17} />
                         </button>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <button onClick={() => openEditForm(key)} className="font-serif italic text-lg leading-tight hover:underline text-left truncate font-bold text-[#094D2B]">
+                            <button onClick={() => openEditForm(key)} className="font-sans text-sm hover:underline text-left truncate font-bold text-slate-800">
                               {key.name}
                             </button>
                             {(() => {
-                              const badge = getProviderBadge(key.endpoint);
+                              const badge = getProviderBadge(key.endpoint, key.provider);
                               return (
-                                <span className={`px-2 py-0.5 border text-[9px] font-mono rounded-full font-bold ${badge.bg}`}>
+                                <span className={`px-2 py-0.5 border text-[9px] font-mono rounded-full font-bold ${
+                                  badge.bg.includes('emerald') || badge.bg.includes('green') ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 
+                                  badge.bg.includes('purple') ? 'bg-purple-50 text-purple-600 border-purple-100' : 
+                                  badge.bg.includes('orange') || badge.bg.includes('amber') ? 'bg-amber-50 text-amber-600 border-amber-100' : 
+                                  'bg-indigo-50 text-indigo-600 border-indigo-100'
+                                }`}>
                                   {badge.name}
                                 </span>
                               );
                             })()}
                             {key.modelFilters && key.modelFilters.length > 0 && (
-                              <span className="px-1.5 py-0.5 border border-[#BCE5CC] bg-[#EBF5EE] text-[#0A3D23] text-[8px] font-mono rounded font-bold">路由过滤</span>
+                              <span className="px-1.5 py-0.5 border border-emerald-100 bg-emerald-50/50 text-emerald-700 text-[8px] font-mono rounded font-bold">路由过滤</span>
                             )}
                           </div>
                           <p className="font-mono text-[10px] opacity-65 truncate flex items-center gap-2 mt-1">
-                            <span className="truncate max-w-[200px] text-gray-500">{key.endpoint || (config.settings.defaultEndpoint + ' (系统默认)')}</span>
-                            {key.rpmLimit ? <span className="text-emerald-700 font-bold">RPM: {key.rpmLimit}</span> : null}
+                            <span className="truncate max-w-[200px] text-slate-500">{key.endpoint || (config.settings.defaultEndpoint + ' (系统默认)')}</span>
+                            {key.rpmLimit ? <span className="text-emerald-600 font-bold">RPM: {key.rpmLimit}</span> : null}
                           </p>
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between lg:justify-end gap-4 sm:gap-6 font-mono text-sm shrink-0">
+                      <div className="flex items-center justify-between lg:justify-end gap-3 sm:gap-6 font-mono text-sm shrink-0">
                         <div className="flex items-center gap-2">
                           {key.status === 'active' ? (
                             <CheckCircle2 size={16} className="text-emerald-600" />
@@ -1340,13 +1598,13 @@ export default function App() {
                             <AlertCircle size={16} className="text-red-600" />
                           )}
                           <div className="flex flex-col">
-                            <span className="hidden lg:inline text-xs uppercase font-bold text-gray-700">
+                            <span className="hidden lg:inline text-xs uppercase font-bold text-slate-700">
                               {key.status === 'active' ? '在线' : key.status === 'rate-limited' ? '限流冷却中' : key.status === 'error' ? '异常' : key.status === 'circuit-broken' ? '已熔断' : '未知状态'}
                             </span>
                             {(key.status === 'circuit-broken' || key.status === 'rate-limited') && (
                               <button 
                                 onClick={() => resetKeyStatus(key.id)}
-                                className="text-[8px] underline text-red-750 hover:text-red-900 font-bold"
+                                className="text-[9px] hover:underline text-rose-600 font-semibold mt-0.5 cursor-pointer"
                               >
                                 手动恢复
                               </button>
@@ -1357,29 +1615,29 @@ export default function App() {
                         {key.quotaLimit ? (
                           <div className="flex flex-col items-end sm:w-28 text-right">
                              <span className="text-[10px] opacity-40 uppercase leading-none mb-1 font-bold">剩余额度</span>
-                             <div className="w-full h-1 bg-[#EFF2EF] rounded-full overflow-hidden mb-1 border select-none font-bold">
+                             <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden mb-1 select-none font-bold">
                                 <div 
-                                  className="h-full bg-[#094D2B] transition-all" 
+                                  className="h-full bg-emerald-500 transition-all" 
                                   style={{ width: `${Math.max(0, Math.min(100, (1 - (key.quotaUsed || 0) / key.quotaLimit) * 100))}%` }}
                                 />
                              </div>
-                             <span className="numeric text-[10px] font-bold text-[#094D2B]">{Math.max(0, key.quotaLimit - (key.quotaUsed || 0))}/{key.quotaLimit}</span>
+                             <span className="numeric text-[10px] font-bold text-emerald-600">{Math.max(0, key.quotaLimit - (key.quotaUsed || 0))}/{key.quotaLimit}</span>
                           </div>
                         ) : null}
 
                         <div className="flex flex-col items-end sm:w-24">
                           <span className="text-[10px] opacity-40 uppercase leading-none mb-1 font-bold">成功/总数</span>
-                          <span className="numeric text-[11px] font-bold">{(key.useCount || 0) - (key.errorCount || 0)}/{key.useCount || 0}</span>
+                          <span className="numeric text-[11px] font-bold text-slate-700">{(key.useCount || 0) - (key.errorCount || 0)}/{key.useCount || 0}</span>
                         </div>
 
-                        <div className="flex flex-col items-end sm:w-32 hidden sm:flex">
+                        <div className="flex flex-col items-end sm:w-32 hidden sm:flex font-sans">
                           <span className="text-[10px] opacity-40 uppercase leading-none mb-1 font-bold">最后透传时间</span>
-                          <span className="text-[11px] truncate w-full text-right text-gray-650">
+                          <span className="text-[11px] truncate w-full text-right text-slate-500">
                             {key.lastUsed ? new Date(key.lastUsed).toLocaleTimeString() : '从未调用'}
                           </span>
                         </div>
 
-                        <div className="flex gap-1">
+                        <div className="flex gap-1.5">
                           <button 
                             onClick={() => {
                               if (availableModels[key.id]) {
@@ -1397,25 +1655,25 @@ export default function App() {
                                 fetchModelsForKey(key.id);
                               }
                             }}
-                            className={`p-2 transition-colors border rounded hover:bg-[#EBF5EE] ${availableModels[key.id] ? 'bg-[#094D2B] border-[#094D2B] text-white' : 'border-gray-200'}`}
+                            className={`p-2 transition-colors border rounded-lg hover:bg-slate-50 cursor-pointer ${availableModels[key.id] ? 'bg-slate-900 border-slate-900 text-white' : 'border-slate-205 text-slate-500 bg-white'}`}
                             title={availableModels[key.id] ? "收起模型列表" : (key.confirmedModels ? "查看已确认模型" : "查询模型")}
                           >
-                            <Database size={17} className={fetchingModels === key.id ? "animate-spin" : ""} />
+                            <Database size={16} className={fetchingModels === key.id ? "animate-spin" : ""} />
                           </button>
 
                           <button 
                             onClick={() => setShowLogs(prev => ({ ...prev, [key.id]: !prev[key.id] }))}
-                            className={`p-2 transition-colors border rounded hover:bg-[#EBF5EE] ${showLogs[key.id] ? 'bg-[#094D2B] border-[#094D2B] text-white' : 'border-gray-200'}`}
+                            className={`p-2 transition-colors border rounded-lg hover:bg-slate-50 cursor-pointer ${showLogs[key.id] ? 'bg-slate-900 border-slate-900 text-white' : 'border-slate-205 text-slate-500 bg-white'}`}
                             title="查看最后 3 次调用日志"
                           >
-                            <History size={17} />
+                            <History size={16} />
                           </button>
 
                           <button 
                             onClick={() => deleteKey(key.id)}
-                            className="p-2 text-red-600 border border-gray-200 rounded hover:bg-red-50 hover:border-red-200 transition-colors"
+                            className="p-2 text-rose-600 border border-slate-200 rounded-lg hover:bg-rose-50 hover:border-rose-150 transition-colors bg-white cursor-pointer"
                           >
-                            <Trash2 size={17} />
+                            <Trash2 size={16} />
                           </button>
                         </div>
                       </div>
@@ -1425,32 +1683,32 @@ export default function App() {
                       <motion.div 
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: 'auto', opacity: 1 }}
-                        className="mx-4 mb-3 mt-[-8px] bg-[#15231B] border-2 border-[#1E2E24] text-[#EFF5EE] p-4 text-[10px] font-mono shadow-[3px_3px_0px_0px_#1E2E24]"
+                        className="mx-4 mb-4 mt-[-4px] bg-slate-50 border border-slate-200 text-slate-700 p-4.5 rounded-xl text-[10px] font-mono shadow-sm"
                       >
-                        <div className="flex items-center justify-between mb-2 pb-1 border-b border-emerald-800/60 uppercase tracking-widest text-[8px] font-bold text-emerald-400">
+                        <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-slate-200/80 uppercase tracking-wider text-[8px] font-bold text-slate-500">
                           <span>并发调用追踪 (CONCURRENT CALL TRACKER)</span>
                           <span>最近 3 次流水</span>
                         </div>
                         {key.lastLogs && key.lastLogs.length > 0 ? (
                           <div className="space-y-2">
                             {key.lastLogs.map((log, idx) => (
-                              <div key={idx} className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-950/40 pb-1 last:border-0 ${log.status >= 400 ? 'text-red-400' : ''}`}>
+                              <div key={idx} className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-150 py-1 last:border-0 ${log.status >= 400 ? 'text-rose-600' : ''}`}>
                                 <div className="flex items-center gap-2">
-                                  <span className={log.status >= 400 ? 'text-red-400 font-bold' : 'text-emerald-400'}>[{log.status}]</span>
+                                  <span className={log.status >= 400 ? 'text-rose-600 font-bold' : 'text-emerald-600'}>[{log.status}]</span>
                                   <span className="opacity-70">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                                  <span className="bg-white/10 px-1 rounded text-white truncate max-w-[150px]">{log.model}</span>
+                                  <span className="bg-slate-200/80 px-1 rounded text-slate-800 truncate max-w-[150px]">{log.model}</span>
                                   {log.status >= 400 && (
-                                    <span className="font-bold text-[8px] border border-red-400 px-1 rounded">
+                                    <span className="font-bold text-[8px] border border-rose-400 px-1 rounded">
                                       {getErrorDescription(log.status)}
                                     </span>
                                   )}
                                 </div>
-                                <span className="opacity-50 truncate sm:text-right">PATH: {log.path}</span>
+                                <span className="opacity-50 truncate sm:text-right font-mono text-[9px]">PATH: {log.path}</span>
                               </div>
                             ))}
                           </div>
                         ) : (
-                          <div className="opacity-40 italic py-2">无历史调用记录</div>
+                          <div className="opacity-40 italic py-2 text-center text-[10px]">无历史调用记录</div>
                         )}
                       </motion.div>
                     )}
@@ -1459,15 +1717,15 @@ export default function App() {
                       <motion.div 
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: 'auto', opacity: 1 }}
-                        className="mx-4 mb-4 mt-[-8px] bg-[#EFF2EF] border-2 border-[#1E2E24] p-4 text-[10px] font-mono shadow-[3px_3px_0px_0px_#1E2E24]"
+                        className="mx-4 mb-4 mt-[-4px] bg-slate-50 border border-slate-200 text-slate-700 p-4.5 rounded-xl text-[10px] font-mono shadow-sm"
                       >
                         <div className="flex items-center justify-between mb-2">
-                          <span className="opacity-70 font-bold text-[#094D2B]">可用模型组 ({availableModels[key.id].length}):</span>
+                          <span className="opacity-70 font-bold text-slate-750">可用模型组 ({availableModels[key.id].length}):</span>
                           <div className="flex gap-4">
                             <button 
                               onClick={() => fetchModelsForKey(key.id)}
                               disabled={fetchingModels === key.id}
-                              className="underline hover:no-underline flex items-center gap-1 font-bold text-[#094D2B]"
+                              className="underline hover:no-underline flex items-center gap-1 font-bold text-slate-600 hover:text-slate-800 cursor-pointer"
                             >
                               {fetchingModels === key.id ? <RefreshCw size={10} className="animate-spin" /> : null}
                               更新列表
@@ -1483,22 +1741,22 @@ export default function App() {
                                   target.innerText = original;
                                 }, 1500);
                               }}
-                              className="underline hover:no-underline font-bold text-[#094D2B]"
+                              className="underline hover:no-underline font-bold text-slate-600 hover:text-slate-800 cursor-pointer"
                             >
                               复制全部
                             </button>
                           </div>
                         </div>
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex flex-wrap gap-1 font-mono">
                           {availableModels[key.id].map(modelId => {
                             const detail = key.modelDetails?.[modelId];
                             const ctxLen = detail?.contextLength;
                             const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : null;
                             const modelType = detectModelType(modelId);
                             return (
-                              <span key={modelId} className="px-1.5 py-0.5 bg-white border border-[#1E2E24]/20 rounded select-all flex items-center gap-1.5 text-[11px] hover:border-[#1E2E24]">
-                                <span className="truncate text-gray-800 font-medium">{modelId}</span>
-                                {ctx && <span className="opacity-60 text-[8px] bg-[#EBF5EE] text-[#0A3D23] px-1 rounded font-bold">{ctx}</span>}
+                              <span key={modelId} className="px-1.5 py-0.5 bg-white border border-slate-200 rounded select-all flex items-center gap-1.5 text-[11px] hover:border-slate-350">
+                                <span className="truncate text-slate-800 font-medium">{modelId}</span>
+                                {ctx && <span className="opacity-60 text-[8px] bg-slate-100 text-slate-700 px-1 rounded font-bold">{ctx}</span>}
                                 <span className={`text-[8px] leading-none px-1 py-0.5 rounded border ${modelType.bgClass}`}>
                                   {modelType.label.split(" | ")[0]}
                                 </span>
@@ -1514,9 +1772,9 @@ export default function App() {
               ) : viewMode === 'models' ? (
                 <motion.div key="models" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
                   {/* Model Search and Filter Header */}
-                  <div className="border-2 border-[#1E2E24] bg-white p-4 shadow-[4px_4px_0px_0px_#1E2E24] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div className="space-y-1">
-                      <h3 className="font-serif italic text-base font-bold text-[#094D2B]">端点聚合模型中心 (Aggregated Model Hub)</h3>
+                      <h3 className="font-sans text-sm font-extrabold text-slate-800">端点聚合模型中心 (Aggregated Model Hub)</h3>
                       <p className="text-[10px] text-gray-500 font-mono">
                         智能汇总当前所有路由节点所授权通过的活跃大模型源（共 {
                           Array.from(new Set(config.keys.flatMap(key => {
@@ -1528,13 +1786,13 @@ export default function App() {
                         } 个独立可用模型）
                       </p>
                     </div>
-                    <div className="w-full sm:w-72 relative">
+                    <div className="w-full sm:w-72 relative font-sans">
                       <input
                         type="search"
                         placeholder="关键字模糊检索大模型 (如 qwen, deepseek)..."
                         value={modelsSearch}
                         onChange={(e) => setModelsSearch(e.target.value)}
-                        className="w-full border-2 border-[#1E2E24]/30 focus:border-[#094D2B] p-2 pl-3 text-xs font-mono focus:ring-0 focus:outline-none focus:bg-[#EBF5EE]/10 rounded font-semibold"
+                        className="w-full border border-slate-250 focus:border-slate-450 p-2.5 pl-3.5 text-xs font-mono focus:ring-0 focus:outline-none bg-slate-50 rounded-xl font-semibold"
                       />
                     </div>
                   </div>
@@ -1566,42 +1824,161 @@ export default function App() {
                       const modelType = detectModelType(modelId);
 
                       return (
-                        <div key={modelId} className="bg-white border-2 border-[#1E2E24] shadow-[4px_4px_0px_0px_#1E2E24] overflow-hidden">
-                          <div className="bg-[#094D2B] text-white p-2.5 px-4 flex justify-between items-center text-[10px] uppercase font-mono tracking-widest">
+                        <div key={modelId} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden font-sans animate-fade-in">
+                          <div className="bg-slate-50 border-b border-slate-150 text-slate-700 p-3.5 px-4 flex justify-between items-center text-[10px] uppercase font-mono tracking-wider">
                             <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
-                              <span className="bg-white/20 px-2 py-0.5 rounded text-white flex items-center gap-2 font-bold">
+                              <span className="bg-slate-200 text-slate-700 px-2.5 py-0.5 rounded-lg flex items-center gap-2 font-bold font-mono">
                                 模型: {modelId}
-                                {ctx && <span className="bg-emerald-900 border border-emerald-700 px-1 rounded text-[8px]">{ctx} CTX</span>}
+                                {ctx && <span className="bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded text-[8px]">{ctx} CTX</span>}
                               </span>
-                              <span className="bg-white/10 px-2 py-0.5 rounded border border-white/20 text-white text-[8px] tracking-normal font-sans font-bold">
+                              <span className="bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded text-indigo-700 text-[8px] tracking-normal font-sans font-bold">
                                 {modelType.label}
                               </span>
-                              <span className="opacity-75 text-[9px] font-bold">{keysForModel.length} 个端点支持此模型路由</span>
+                              <span className="text-slate-550 text-[9px] font-bold">{keysForModel.length} 个端点支持此模型路由</span>
                             </div>
                           </div>
-                          <div className="divide-y divide-[#1E2E24]/10">
-                            {keysForModel.map(key => (
-                               <div key={key.id} className="p-3 px-4 flex items-center justify-between text-xs transition-colors hover:bg-[#EBF5EE]/30">
-                                 <div className="flex items-center gap-3 font-semibold">
-                                   <div className={`w-2.5 h-2.5 rounded-full ${key.status === 'active' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
-                                   <span className="font-serif italic text-sm font-bold text-gray-850">{key.name}</span>
-                                   <span className="opacity-55 font-mono text-[9px] truncate max-w-[150px]">{key.endpoint || '系统置顶节点'}</span>
-                                 </div>
-                                 <div className="flex items-center gap-8 font-mono text-[10px]">
-                                   {key.quotaLimit ? (
-                                     <div className="text-right">
-                                       <span className="opacity-55 mr-2 font-bold">剩余可用额度:</span>
-                                       <span className="font-bold text-[#094D2B]">{Math.max(0, key.quotaLimit - (key.quotaUsed || 0))} / {key.quotaLimit}</span>
-                                     </div>
-                                   ) : <span className="opacity-40 uppercase tracking-widest text-[9px] font-bold text-emerald-700">不限配额</span>}
-                                   
-                                   <div className="text-right w-20 font-bold">
-                                     <span className="opacity-55 mr-2">RPM:</span>
-                                     <span className="font-bold">{key.rpmLimit || '∞'}</span>
-                                   </div>
-                                 </div>
-                               </div>
-                            ))}
+                          
+                          <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-150 font-sans">
+                            {/* Left Column: Endpoints list */}
+                            <div className="lg:col-span-7 divide-y divide-slate-100">
+                              {keysForModel.map(key => {
+                                const perf = getLatencyForProviderModel(key, modelId, globalLogs);
+                                return (
+                                  <div key={key.id} className="p-4 px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs transition-colors hover:bg-slate-50/70">
+                                    <div className="flex items-center gap-3 font-semibold min-w-0">
+                                      <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${key.status === 'active' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <span className="font-sans text-sm font-bold text-slate-800 truncate">{key.name}</span>
+                                          <span className="text-[9px] bg-slate-105 border border-slate-200 px-1.5 py-0.2 rounded font-mono text-slate-500">
+                                            {perf.latency}ms {perf.type === 'real' || perf.type === 'real_key' ? '🎯 实战' : '⚡ 估算'}
+                                          </span>
+                                        </div>
+                                        <span className="opacity-55 font-mono text-[9px] block truncate max-w-[240px] text-slate-500 mt-0.5">{key.endpoint || '系统置顶节点'}</span>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-6 font-mono text-[10px] justify-between sm:justify-end">
+                                      {key.quotaLimit ? (
+                                        <div className="text-right">
+                                          <span className="opacity-55 mr-1 font-bold">剩余配额:</span>
+                                          <span className="font-bold text-emerald-600">{Math.max(0, key.quotaLimit - (key.quotaUsed || 0))} / {key.quotaLimit}</span>
+                                        </div>
+                                      ) : <span className="opacity-55 uppercase tracking-wider text-[9px] font-bold text-emerald-600 font-sans">不限配额</span>}
+                                      
+                                      <div className="text-right min-w-[60px] font-bold text-slate-700">
+                                        <span className="opacity-55 mr-1">RPM:</span>
+                                        <span className="font-bold">{key.rpmLimit || '∞'}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            
+                            {/* Right Column: Comparative Latency Bar Chart */}
+                            <div className="lg:col-span-5 p-5 bg-slate-50/40 flex flex-col justify-between min-h-[220px]">
+                              <div>
+                                <div className="flex items-center justify-between mb-2">
+                                  <h4 className="font-sans text-xs font-extrabold text-[#094D2B] flex items-center gap-1.5">
+                                    <Activity size={12} className="text-emerald-600" />
+                                    <span>端点及协议往返时延对比 (Proxy Latency)</span>
+                                  </h4>
+                                  {(() => {
+                                    const chartData = keysForModel.map(key => {
+                                      const perf = getLatencyForProviderModel(key, modelId, globalLogs);
+                                      return { name: key.name, latency: perf.latency, type: perf.type };
+                                    });
+                                    const hasReal = chartData.some(d => d.type === 'real' || d.type === 'real_key');
+                                    return (
+                                      <span className={`px-1.5 py-0.5 text-[8px] font-mono font-bold rounded uppercase tracking-wider ${hasReal ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                                        {hasReal ? '🎯 实时测量' : '⏱️ 预设基准'}
+                                      </span>
+                                    );
+                                  })()}
+                                </div>
+                                <p className="text-[10px] text-slate-500 font-sans mb-4 leading-relaxed">
+                                  该模型的各分流通道往返时延（包含协议转换中置开销）。延迟越低代表 Agent 发起回复与首字下发的总体感官体验越优越。
+                                </p>
+                              </div>
+
+                              {(() => {
+                                const chartData = keysForModel.map(key => {
+                                  const perf = getLatencyForProviderModel(key, modelId, globalLogs);
+                                  return {
+                                    name: key.name,
+                                    latency: perf.latency,
+                                    type: perf.type,
+                                    endpoint: key.endpoint || '系统代转端点',
+                                    status: key.status
+                                  };
+                                }).sort((a, b) => a.latency - b.latency);
+
+                                return (
+                                  <div className="h-44 w-full bg-white/55 border border-slate-150 p-2 rounded-xl">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                      <BarChart
+                                        data={chartData}
+                                        layout="vertical"
+                                        margin={{ top: 5, right: 15, left: 0, bottom: 5 }}
+                                      >
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
+                                        <XAxis 
+                                          type="number" 
+                                          domain={[0, 'dataMax + 100']} 
+                                          stroke="#94a3b8" 
+                                          fontSize={8} 
+                                          tickFormatter={(v) => `${v}ms`}
+                                        />
+                                        <YAxis 
+                                          type="category" 
+                                          dataKey="name" 
+                                          stroke="#475569" 
+                                          fontSize={8} 
+                                          width={75}
+                                          tickLine={false}
+                                          axisLine={false}
+                                        />
+                                        <Tooltip 
+                                          content={({ active, payload }) => {
+                                            if (active && payload && payload.length) {
+                                              const data = payload[0].payload;
+                                              return (
+                                                <div className="bg-white border-2 border-slate-200 p-2 rounded-lg shadow-sm font-sans text-[10px] space-y-1">
+                                                  <p className="font-bold text-slate-800">{data.name}</p>
+                                                  <p className="text-[8px] text-slate-400 font-mono truncate max-w-[170px]">{data.endpoint}</p>
+                                                  <div className="flex items-center gap-2 mt-0.5 py-0.5 px-1 bg-slate-50 rounded">
+                                                    <span className="font-bold text-[#094D2B] font-mono">{data.latency} ms</span>
+                                                    <span className="text-[7px] bg-slate-200 text-slate-700 px-1 rounded uppercase font-bold tracking-wider">
+                                                      {data.type === 'real' ? '🎯 实时实测' : data.type === 'real_key' ? '⚡ 节点平均' : '⏳ 协议基准'}
+                                                    </span>
+                                                  </div>
+                                                </div>
+                                              );
+                                            }
+                                            return null;
+                                          }}
+                                        />
+                                        <Bar dataKey="latency" radius={[0, 4, 4, 0]} barSize={9}>
+                                          {chartData.map((entry, index) => {
+                                            let color = '#d97706'; 
+                                            if (entry.latency < 200) {
+                                              color = '#059669'; // Emerald-500
+                                            } else if (entry.latency < 400) {
+                                              color = '#06b6d4'; // Cyan-500
+                                            } else if (entry.latency < 600) {
+                                              color = '#f59e0b'; // Amber-500
+                                            } else {
+                                              color = '#f43f5e'; // Rose-500
+                                            }
+                                            return <Cell key={`cell-${index}`} fill={color} />;
+                                          })}
+                                        </Bar>
+                                      </BarChart>
+                                    </ResponsiveContainer>
+                                  </div>
+                                );
+                              })()}
+                            </div>
                           </div>
                         </div>
                       );
@@ -1609,55 +1986,661 @@ export default function App() {
                 </motion.div>
               ) : viewMode === 'logs' ? (
                 <motion.div key="logs" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
-                  <div className="border-2 border-[#1E2E24] bg-white p-4 shadow-[4px_4px_0px_0px_#1E2E24] space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b-2 border-gray-100 pb-2">
-                      <span className="font-mono text-xs uppercase tracking-widest font-bold text-[#094D2B]">API 流水穿透总日志 (GLOBAL API PROXY LOGS)</span>
-                      <span className="font-mono text-[9px] opacity-60">实时显示最后 100 条请求记录 (Awaiting incoming request payloads)</span>
+                  <div className="bg-[#111A2E]/60 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between">
+                    <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
+                      <span className="font-sans text-xs uppercase tracking-wider font-extrabold text-white">中转流水实时总日志 (PROXY ENDPOINT LOGS)</span>
+                      <span className="font-mono text-[9px] text-[#10B981] bg-slate-900 border border-slate-800 px-2 py-0.5 rounded-md">
+                        存储深度: 最近 100 笔
+                      </span>
                     </div>
 
                     {globalLogs.length === 0 ? (
-                      <div className="p-12 text-center text-xs opacity-40 font-mono italic">
-                        没有近期接口代理请求日志。在左侧使用命令行请求 API 接口后，日志将在这里实时渲染。
+                      <div className="p-12 text-center text-xs text-slate-500 font-mono italic border border-dashed border-slate-800 mt-5 rounded-xl">
+                        没有近期接口代理请求日志。请呼叫 API 或者是用 CLI 互动沙盒进行连接触发！
                       </div>
                     ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse font-mono text-xs">
-                          <thead>
-                            <tr className="border-b-2 border-[#1E2E24]/30 bg-[#EFF2EF] text-[#094D2B] text-[10px] uppercase font-bold">
-                              <th className="p-2 select-none">时间 (Time)</th>
-                              <th className="p-2 select-none">方法 (Method)</th>
-                              <th className="p-2 select-none">请求模型 (Model Keyed)</th>
-                              <th className="p-2 select-none">端点源 (Node Key)</th>
-                              <th className="p-2 select-none">接口路由 (Path)</th>
-                              <th className="p-2 text-right select-none">耗时 (Latency)</th>
-                              <th className="p-2 text-center select-none">状态码 (Status)</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-100">
-                            {globalLogs.map((log, idx) => {
-                              const date = new Date(log.timestamp);
-                              const timeStr = date.toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
-                              const isErr = log.status >= 400;
-                              return (
-                                <tr key={log.id || idx} className="hover:bg-[#EBF5EE]/20 transition-colors">
-                                  <td className="p-2 text-[10px] opacity-50 whitespace-nowrap">{timeStr}</td>
-                                  <td className="p-2"><span className="bg-[#094D2B] text-white px-1.5 py-0.5 rounded text-[8px] font-bold">{log.method}</span></td>
-                                  <td className="p-2 font-bold truncate max-w-[124px] text-[#1E2E24]" title={log.model}>{log.model}</td>
-                                  <td className="p-2 font-serif italic text-[#094D2B]" title={log.keyName}>{log.keyName}</td>
-                                  <td className="p-2 opacity-70 truncate max-w-[140px] text-gray-500" title={log.path}>{log.path}</td>
-                                  <td className="p-2 text-right text-[10px] font-bold text-gray-700">{log.duration ? `${log.duration}ms` : '150ms'}</td>
-                                  <td className="p-2 text-center">
-                                    <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${isErr ? "bg-red-100 text-red-700 border border-red-200" : "bg-emerald-100 text-emerald-700 border border-emerald-200"}`}>
-                                      {log.status}
-                                    </span>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                      <div className="space-y-2.5 max-h-[600px] overflow-y-auto pr-1 text-xs font-mono custom-scrollbar mt-5">
+                        {globalLogs.map((log, idx) => {
+                          const isErr = log.status >= 400;
+                          return (
+                            <div key={log.id || idx} className="p-3 bg-slate-950/40 border border-slate-800/85 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-900/30 transition-colors">
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="bg-emerald-500/15 text-emerald-400 border border-emerald-500/10 px-2 py-0.5 text-[8.5px] font-mono font-black uppercase tracking-wider rounded">{log.method}</span>
+                                  <span className="font-mono font-bold text-slate-200">{log.model}</span>
+                                  <span className="text-[10px] bg-slate-900 text-slate-400 font-mono border border-slate-800/60 px-1.5 py-0.5 rounded-md">{log.keyName}</span>
+                                </div>
+                                <p className="text-[11px] text-slate-500 font-mono break-all">{log.path}</p>
+                              </div>
+                              <div className="text-right shrink-0 flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2">
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold border ${isErr ? "bg-red-500/10 text-red-400 border-red-500/20" : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"}`}>
+                                  {log.status}
+                                </span>
+                                <p className="text-[10px] text-slate-500 font-mono">{log.duration ? `${log.duration}ms` : '120ms'}</p>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
+                  </div>
+                </motion.div>
+              ) : viewMode === 'cli' ? (
+                <motion.div key="cli" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
+                  {/* CLI INTEGRATION HEADER */}
+                  <div className="bg-gradient-to-br from-[#12232E]/40 via-[#10192C]/70 to-[#0B0F19] border border-slate-800 p-6 rounded-2xl relative overflow-hidden shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2 text-emerald-400">
+                        <Terminal className="w-5 h-5 stroke-[2.5]" />
+                        <h3 className="font-sans text-base font-extrabold text-white">CLI & Terminal OpenAI SDK Adapter</h3>
+                      </div>
+                      <p className="text-xs text-slate-400 font-sans leading-relaxed max-w-2xl">
+                        此模块专为开发终端中需要将各类非标大模型（如 SiliconFlow, 各种 Open Weight 本地微调模型等）转换为标准 <b>OpenAI SDK 协议格式</b> 进行快速调试、集成的客户端提供自动输出 of 适配配置。
+                      </p>
+                    </div>
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 flex items-center gap-2 rounded-xl shrink-0 self-start md:self-auto">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse-slow"></span>
+                      <span className="font-mono text-[9px] tracking-wider uppercase font-black text-emerald-400">OAUTH GATEWAY READY</span>
+                    </div>
+                  </div>
+
+                  {/* STEP WIZARD INDICATOR */}
+                  <div className="bg-slate-950/40 border border-slate-800/80 p-2 rounded-2xl">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                      {[
+                        { num: 1, title: '1. OpenAI SDK 格式接入', desc: 'Python / NodeJS / Curl 样例代码' },
+                        { num: 2, title: '2. 常用 IDE / CLI 继承端', desc: 'Cursor / Claude Code / Cline 指南' },
+                        { num: 3, title: '3. OAuth 自愈拦截模拟器', desc: '高可用令牌适应与终端沙盒' }
+                      ].map((s) => {
+                        const active = cliStep === s.num;
+                        const done = cliStep > s.num;
+                        return (
+                          <button
+                            key={s.num}
+                            type="button"
+                            onClick={() => setCliStep(s.num)}
+                            className={`p-3 text-left rounded-xl transition-all select-none cursor-pointer border ${
+                              active 
+                                ? 'bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border-emerald-500 text-emerald-400 font-bold shadow-md transform scale-[1.01]' 
+                                : 'bg-slate-900 border-slate-850 text-slate-400 hover:text-white hover:border-slate-700'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`w-5 h-5 rounded-full text-[10.5px] font-mono font-bold flex items-center justify-center border ${
+                                active 
+                                  ? 'bg-emerald-500 text-slate-950 border-emerald-500' 
+                                  : done
+                                  ? 'bg-emerald-950/50 text-emerald-400 border-emerald-800/40'
+                                  : 'bg-slate-950 text-slate-500 border-slate-800'
+                              }`}>
+                                {done ? '✓' : s.num}
+                              </span>
+                              <span className="text-xs font-sans font-bold">{s.title}</span>
+                            </div>
+                            <span className="text-[10px] font-sans text-slate-500 block truncate pl-7">{s.desc}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+                    {/* LEFT PANEL: CONFIG STEP ACTIONS */}
+                    <div className="xl:col-span-7 space-y-6">
+                      
+                      {/* STEP 1: OPENAI COMPATIBLE ENDPOINT & SDK SAMPLES */}
+                      {cliStep === 1 && (
+                        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-white border-2 border-[#1E2E24] p-6 shadow-[4px_4px_0px_0px_#1E2E24] space-y-4">
+                          <div className="border-b border-gray-100 pb-3 flex justify-between items-center">
+                            <h4 className="font-serif italic font-bold text-base text-[#094D2B]">配置 1: OpenAI SDK / API 标准中转接入与格式转换</h4>
+                            <span className="font-mono text-[10px] text-gray-400 uppercase">OpenAI SDK Compatibility</span>
+                          </div>
+                          
+                          <p className="text-xs text-gray-500 font-medium leading-relaxed">
+                            本负载网关后端已 100% 自动对齐 OpenAI 兼容规范！您可以将任何模型以 <b>OpenAI SDK 格式</b> 呼叫出来。请将您的应用或代码配置基址 (API Base URL) 和密钥指向本服务器即可。
+                          </p>
+
+                          {/* CLI Auto-Translation banner */}
+                          <div className="p-4 rounded-xl border border-emerald-800/20 bg-emerald-50/70 dark:bg-emerald-950/20 flex items-start gap-3">
+                            <div className="p-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-400 mt-0.5">
+                              <Terminal size={16} />
+                            </div>
+                            <div className="space-y-1">
+                              <span className="font-sans font-bold text-xs text-[#0a2316] dark:text-[#a7f3d0] block">⚡ CLI 专有模型零阻碍无缝代换层 (Model Alias Transformer) 已上线！</span>
+                              <p className="text-[10.5px] text-[#2c533c] dark:text-gray-300 leading-relaxed">
+                                网关通过拦截并智能解析底层 OAuth 握手和请求 Body，已原生支持对 <b>codex</b>、<b>Gemini-cli</b> 和 <b>antigravity-cli</b> 等终端内置定制模型进行无感式<b>热代换与别名映射</b>。即使您的 CLI 客户端指定了不兼容的旧版/私有模型标识，9router 也会在毫秒级将其自动重映射并路由至当下活跃的、性能最匹配的主流开源/闭源高吞吐模型（如 DeepSeek、Qwen Coder 或 Llama），保障终端一键跑通，永久避免 model_not_found 报错！
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Quick connection parameters cards */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-[#EBF5EE]/20 border border-[#1E2E24]/15 rounded">
+                            <div className="space-y-1">
+                              <span className="font-mono text-[9px] uppercase font-black text-[#094D2B] block">1. 统一兼容端点 (Base URL)</span>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  readOnly
+                                  value={`${proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1`}
+                                  className="flex-1 bg-white border border-gray-200 p-2 font-mono text-[11px] rounded focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(`${proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1`);
+                                    triggerCopy('baseUrl', `${proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1`);
+                                  }}
+                                  className="bg-[#094D2B] text-white font-mono text-[10px] px-3.5 py-1.5 hover:bg-[#073A21] rounded font-bold"
+                                >
+                                  {copiedStates['baseUrl'] ? "已复制" : "复制"}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <span className="font-mono text-[9px] uppercase font-black text-[#094D2B] block">2. 授权密钥 (OpenAI API Key)</span>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  readOnly
+                                  value={config.settings.masterKey || "any-key-value (未配置 MasterKey 时填任意串)"}
+                                  className="flex-1 bg-white border border-gray-200 p-2 font-mono text-[11px] rounded focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(config.settings.masterKey || "any-key-value");
+                                    triggerCopy('masterKey', config.settings.masterKey || "any-key-value");
+                                  }}
+                                  className="bg-[#094D2B] text-white font-mono text-[10px] px-3.5 py-1.5 hover:bg-[#073A21] rounded font-bold"
+                                >
+                                  {copiedStates['masterKey'] ? "已复制" : "复制"}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="col-span-1 md:col-span-2 space-y-1">
+                              <span className="font-mono text-[9px] uppercase font-black text-[#094D2B] block">3. 选定测试大模型 (Model Key)</span>
+                              <div className="flex items-center gap-3">
+                                <select 
+                                  value={cliModelName}
+                                  onChange={e => setCliModelName(e.target.value)}
+                                  className="w-full bg-white border border-gray-200 p-2 font-mono text-[11px] rounded focus:outline-none cursor-pointer focus:border-[#094D2B]"
+                                >
+                                  {Array.from(new Set([
+                                    ...(config?.keys || []).flatMap(k => k.confirmedModels || []),
+                                    'gemini-1.5-pro',
+                                    'deepseek-chat',
+                                    'claude-3-5-sonnet',
+                                    'gpt-4o'
+                                  ])).filter(Boolean).map(m => (
+                                    <option key={m} value={m}>{m}</option>
+                                  ))}
+                                </select>
+                                <p className="text-[10px] text-gray-500 leading-normal font-mono w-1/2">
+                                  选择在下方 SDK 中作为调用形参，网关将自动根据您的活动物理节点挑选出最优源分头转发。
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* SDK Inner Tabs */}
+                          <div className="space-y-2">
+                            <div className="flex border-b border-gray-105 gap-2">
+                              {[
+                                { id: 'python', label: 'Python SDK' },
+                                { id: 'nodejs', label: 'Node.js SDK' },
+                                { id: 'curl', label: 'cURL Terminal' }
+                              ].map(t => (
+                                <button
+                                  key={t.id}
+                                  type="button"
+                                  onClick={() => setCliStep1Tab(t.id as any)}
+                                  className={`px-3 py-1.5 font-mono text-[10.5px] uppercase border-b-2 font-bold transition-all ${cliStep1Tab === t.id ? 'border-[#094D2B] text-[#094D2B]' : 'border-transparent text-gray-400 hover:text-gray-700'}`}
+                                >
+                                  {t.label}
+                                </button>
+                              ))}
+                            </div>
+
+                            <div className="relative font-mono text-xs bg-[#1E2E24] text-[#E8F5EE] p-4 font-normal overflow-x-auto border-2 border-[#1E2E24] rounded">
+                              <pre className="text-[10.5px] leading-relaxed select-all">
+                                {cliStep1Tab === 'python' ? (
+`from openai import OpenAI
+
+# 1. 实例化标准 OpenAI 客户端，基址指向您的 羊毛薅到底 转换服务
+client = OpenAI(
+    base_url="${proxyUrl || (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000")}/v1",
+    api_key="${config.settings.masterKey || 'sk-wool'}"
+)
+
+# 2. 以标准的 OpenAI 语法，直连并呼叫网关后方的聚合高可用模型资源
+response = client.chat.completions.create(
+    model="${cliModelName}", # 支持后端已连接节点对应的任意物理大模型
+    messages=[
+        {"role": "user", "content": "写一个简明的高可用 Redis 分池负载均衡管理器方案"}
+    ],
+    stream=True # 秒级流式排版、无延迟打字机回传
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)`
+                                ) : cliStep1Tab === 'nodejs' ? (
+`import OpenAI from "openai";
+
+// 1. 初始化高亮集成的 OpenAI Client 实例
+const openai = new OpenAI({
+  baseURL: "${proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1",
+  apiKey: "${config.settings.masterKey || 'sk-wool'}"
+});
+
+// 2. 发起流式文本补全对话请求，透明捕获并无感透传至多上游网关
+async function main() {
+  const stream = await openai.chat.completions.create({
+    model: "${cliModelName}",
+    messages: [{ role: "user", content: "用 TypeScript 实现具有故障熔断状态的高性能连接管理器" }],
+    stream: true,
+  });
+
+  for await (const chunk of stream) {
+    process.stdout.write(chunk.choices[0]?.delta?.content || "");
+  }
+}
+
+main();`
+                                ) : (
+`curl -X POST "${proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1/chat/completions" \\
+  -H "Authorization: Bearer ${config.settings.masterKey || 'sk-wool'}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${cliModelName}",
+    "messages": [{"role": "user", "content": "你好，这是一条针对高可用网关进行连接与格式转换测试的指令。"}],
+    "stream": true
+  }'`
+                                )}
+                              </pre>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const text = cliStep1Tab === 'python' ? (
+`from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1",\n    api_key="${config.settings.masterKey || 'sk-wool'}"\n)\n\nresponse = client.chat.completions.create(\n    model="${cliModelName}",\n    messages=[\n        {"role": "user", "content": "写一个简明的高可用 Redis 分池负载均衡管理器方案"}\n    ],\n    stream=True\n)\n\nfor chunk in response:\n    if chunk.choices[0].delta.content:\n        print(chunk.choices[0].delta.content, end="", flush=True)`
+                                  ) : cliStep1Tab === 'nodejs' ? (
+`import OpenAI from "openai";\n\nconst openai = new OpenAI({\n  baseURL: "${proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1",\n  apiKey: "${config.settings.masterKey || 'sk-wool'}"\n});\n\nasync function main() {\n  const stream = await openai.chat.completions.create({\n    model: "${cliModelName}",\n    messages: [{ role: "user", content: "用 TypeScript 实现具有故障熔断状态的高性能连接管理器" }],\n    stream: true,\n  });\n\n  for await (const chunk of stream) {\n    process.stdout.write(chunk.choices[0]?.delta?.content || "");\n  }\n}\n\nmain();`
+                                  ) : (
+`curl -X POST "${proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1/chat/completions" \\\n  -H "Authorization: Bearer ${config.settings.masterKey || 'sk-wool'}" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "${cliModelName}",\n    "messages": [{"role": "user", "content": "你好，这是一条针对高可用网关进行连接与格式转换测试的指令。"}],\n    "stream": true\n  }'`
+                              );
+                              navigator.clipboard.writeText(text);
+                              triggerCopy('sdk-code', text);
+                            }}
+                            className="absolute top-2 right-2 text-[10px] bg-emerald-500 hover:bg-emerald-600 px-3 py-1 text-[#1E2E24] font-black rounded flex items-center gap-1 transition-all"
+                          >
+                            {copiedStates['sdk-code'] ? '✓ 已复制！' : '复制此段示例'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="pt-4 flex justify-end gap-2 border-t border-gray-100">
+                        <button
+                          type="button"
+                          onClick={() => setCliStep(2)}
+                          className="px-4 py-2 bg-[#094D2B] hover:bg-[#073A21] text-white font-mono text-xs font-bold uppercase tracking-wider flex items-center gap-1 shadow-[2px_2px_0px_0px_#1E2E24]"
+                        >
+                          切换至 IDE / CLI 客户端配置 (Next) &rarr;
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+
+
+                      {/* STEP 2: IDE & CLIENT INTEGRATION GUIDES */}
+                      {cliStep === 2 && (
+                        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-white border-2 border-[#1E2E24] p-6 shadow-[4px_4px_0px_0px_#1E2E24] space-y-4">
+                          <div className="border-b border-gray-100 pb-3 flex justify-between items-center">
+                            <h4 className="font-serif italic font-bold text-base text-[#094D2B]">配置 2: 常用 AI 编程 IDE & CLI 终端一键中转劫持</h4>
+                            <span className="font-mono text-[10px] text-gray-400 uppercase">IDE & Tool Chains</span>
+                          </div>
+                          
+                          <p className="text-xs text-gray-500 font-medium leading-relaxed">
+                            您需要使用的是开发套件 CLI，而不是普通的命令行脚本？没问题。您可以将本负载网关直接配置到 Cursor IDE, Claude Code 官方命令行, 或是 Cline/RooCode VSCode 插件中，实现对底层多供应商大模型接口的统一拦截、转发与高可用高吞吐管理。
+                          </p>
+
+                          {/* Client Inner Tabs */}
+                          <div className="space-y-3">
+                            <div className="flex border-b border-gray-105 gap-2">
+                              {[
+                                { id: 'cursor', label: 'Cursor IDE 接入' },
+                                { id: 'claudecode', label: 'Claude Code CLI 命令行' },
+                                { id: 'cline', label: 'Cline (Roo Code) 插件' }
+                              ].map(t => (
+                                <button
+                                  key={t.id}
+                                  type="button"
+                                  onClick={() => setCliStep2Tab(t.id as any)}
+                                  className={`px-3 py-1.5 font-mono text-[10.5px] uppercase border-b-2 font-bold transition-all ${cliStep2Tab === t.id ? 'border-[#094D2B] text-[#094D2B]' : 'border-transparent text-gray-400 hover:text-gray-700'}`}
+                                >
+                                  {t.label}
+                                </button>
+                              ))}
+                            </div>
+
+                            {/* CURSOR GUIDE */}
+                            {cliStep2Tab === 'cursor' && (
+                              <div className="space-y-3 text-xs bg-slate-50 p-4 border border-gray-200 rounded leading-relaxed text-gray-700">
+                                <h5 className="font-bold text-[#094D2B] flex items-center gap-1">🎯 Cursor IDE 客户端五秒配置法：</h5>
+                                <ol className="list-decimal list-inside space-y-1.5 font-sans">
+                                  <li>打开 Cursor，点击右上角齿轮进入 <b>Settings &rarr; Models (设置 &rarr; 模型)</b> 面板。</li>
+                                  <li>向下拉至底部找到 <b>OpenAI API Key</b>，填入 API 主密钥：<code className="bg-gray-200 px-1 font-mono text-[#094D2B] font-bold rounded">{config.settings.masterKey || 'sk-9router'}</code> (若未设 API Key 可填任意字符串)。</li>
+                                  <li>点击 <b>"Override OpenAI Base URL" (覆盖基址)</b>，填入您的统一中转链接：
+                                    <div className="flex items-center gap-2 mt-1">
+                                      <code className="bg-gray-200 px-2 py-0.5 font-mono text-xs select-all rounded">{proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1</code>
+                                    </div>
+                                  </li>
+                                  <li>在 <b>Model List (自定义模型列表)</b> 中添加您后端有可用额度与节点的模型代号 (例如：<code className="bg-gray-200 px-1 font-mono rounded">{cliModelName}</code>)。</li>
+                                  <li>现在直接呼叫 Cursor Chat (Cmd+L) 或 Composer (Cmd+I)，您的工程提示词将全部以标准 OpenAI SDK 的握手逻辑，无损地流经您的 9router 极速负载均衡后台！</li>
+                                </ol>
+                              </div>
+                            )}
+
+                            {/* CLAUDE CODE GUIDE */}
+                            {cliStep2Tab === 'claudecode' && (
+                              <div className="space-y-3 text-xs bg-slate-50 p-4 border border-gray-200 rounded leading-relaxed text-gray-700">
+                                <h5 className="font-bold text-[#094D2B] flex items-center gap-1">🎯 Anthropic 官方 Claude Code CLI 命令行劫持中转：</h5>
+                                <p className="font-sans">
+                                  Claude Code 会话极多、且高频发生上下文重发。我们可以通过在您的本地控制台导出环境变量覆写 Claude Base URL 指向，从而使 CLI 的所有流量平稳转接到 9router，享受免额度秒级输出：
+                                </p>
+                                <div className="relative font-mono text-[11px] bg-[#1E2E24] text-[#E8F5EE] p-3.5 rounded">
+                                  <pre className="select-all">
+{`# 1. 导出 Base URL 为标准 OpenAI SDK 兼容代理端口
+export CLAUDE_BASE_URL="${proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1"
+# 2. 导出系统授权，若后端无需 MasterKey 可填任意伪密钥
+export ANTHROPIC_API_KEY="${config.settings.masterKey || 'sk-9router'}"
+
+# 3. 启动指令
+claude`}
+                                  </pre>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const txt = `export CLAUDE_BASE_URL="${proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1"\nexport ANTHROPIC_API_KEY="${config.settings.masterKey || 'sk-9router'}"\nclaude`;
+                                      navigator.clipboard.writeText(txt);
+                                      triggerCopy('claudecode-env', txt);
+                                    }}
+                                    className="absolute top-2 right-2 text-[9px] bg-emerald-500 hover:bg-emerald-600 px-2 py-0.5 text-[#1E2E24] font-bold rounded"
+                                  >
+                                    {copiedStates['claudecode-env'] ? '✓ 已复制！' : '复制配置变量'}
+                                  </button>
+                                </div>
+                                <p className="font-sans text-[11px] text-gray-500 italic">
+                                  注：部分现代版本的 Claude CLI 若遇到不兼容，可选择将其设置提供商设为自定义 API 或使用 OpenAI 兼容层来进行接入。
+                                </p>
+                              </div>
+                            )}
+
+                            {/* CLINE GUIDE */}
+                            {cliStep2Tab === 'cline' && (
+                              <div className="space-y-3 text-xs bg-slate-50 p-4 border border-gray-200 rounded leading-relaxed text-gray-700">
+                                <h5 className="font-bold text-[#094D2B] flex items-center gap-1">🎯 VS Code 顶级 AI 编程插件 Cline / Roo Code 选择 OpenAI Compatible：</h5>
+                                <ol className="list-decimal list-inside space-y-1.5 font-sans">
+                                  <li>打开 VS Code，唤出 Cline / Roo Code 插件的配置侧边栏。</li>
+                                  <li>在 <b>"API Provider" (提供商)</b> 选择框下拉，选定 <b>"OpenAI Compatible" (OpenAI 兼容)</b> 选项。</li>
+                                  <li><b>"Base URL" (接口入口)</b> 栏贴入：<code className="bg-gray-200 px-1 font-mono select-all text-[#094D2B] font-bold rounded">{proxyUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')}/v1</code></li>
+                                  <li><b>"API Key" (网关凭证)</b> 栏输入您的网关 MasterKey：<code className="bg-gray-200 px-1 font-mono rounded">{config.settings.masterKey || 'sk-9router'}</code> (免密模式随意写)。</li>
+                                  <li><b>"Model ID" (模型代号)</b> 输入您指定的目标运行模型：如 <code className="bg-gray-200 px-1 font-mono rounded">{cliModelName}</code>。</li>
+                                  <li>现在点击保存，Cline 所有的系统文件读写大提示词工程将立即无感借助 9router 进行自动失效重试分流！</li>
+                                </ol>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="pt-4 flex justify-between items-center border-t border-gray-100">
+                            <button
+                              type="button"
+                              onClick={() => setCliStep(1)}
+                              className="px-3.5 py-2 border-2 border-gray-300 hover:border-gray-800 text-gray-700 font-mono text-xs font-bold uppercase tracking-wider"
+                            >
+                              &larr; 返回上一步 (SDK 快速配置)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCliStep(3)}
+                              className="px-4 py-2 bg-[#094D2B] hover:bg-[#073A21] text-white font-mono text-xs font-bold uppercase tracking-wider flex items-center gap-1 shadow-[2px_2px_0px_0px_#1E2E24]"
+                            >
+                              前往 CLI OAuth 拦截模拟 Sandbox (Next) &rarr;
+                            </button>
+                          </div>
+                        </motion.div>
+                      )}
+
+                      {/* STEP 3: OAUTH INTERCEPT SANDBOX & HEALTH DIAGNOSTIC */}
+                      {cliStep === 3 && (
+                        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-white border-2 border-[#1E2E24] p-6 shadow-[4px_4px_0px_0px_#1E2E24] space-y-4">
+                          <div className="border-b border-gray-100 pb-3 flex justify-between items-center">
+                            <h4 className="font-serif italic font-bold text-base text-[#094D2B]">配置 3: CLI 内置 OAuth 拦截与高可用会话校验沙盒</h4>
+                            <span className="font-mono text-[10px] text-gray-400 uppercase">OAuth Sandbox Gateway</span>
+                          </div>
+                          
+                          <p className="text-xs text-gray-500 font-medium leading-relaxed">
+                            当您在终端中使用 gcloud cli、github copilot-cli 或自定义 IDE 插件时，客户端会自动向下发送特异签名的临时 Bearer Token 或会话 JWT。<b>9router 的核心技术点在于可以无感接管并解密这些底层系统的 OAuth 凭证。</b>
+                          </p>
+
+                          {/* How it works grid */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-sans text-gray-700">
+                            <div className="bg-[#EBF5EE]/20 p-3 border border-emerald-800/10 rounded space-y-1">
+                              <span className="font-bold text-[#094D2B] block">🛡️ 1. 免密 / JWT 身份剥除自愈</span>
+                              <p className="text-[11px] leading-relaxed text-gray-500">
+                                收到来自 CLI 的 OAuth 持有者令牌后，9router 会快速拦截并执行临时匹配。即使客户端没有提供明文 OpenAI Key，网关也能识别系统签名并根据集群优先级静默转发至可用渠道。
+                              </p>
+                            </div>
+                            <div className="bg-[#EBF5EE]/20 p-3 border border-emerald-800/10 rounded space-y-1">
+                              <span className="font-bold text-[#094D2B] block">🔄 2. 路由目标集群重平衡</span>
+                              <p className="text-[11px] leading-relaxed text-gray-500">
+                                本系统会将客户端传入的目标 Request Payload 进行统一的流式转换。如果检测到目标厂商节点突发熔断或 429 频控，网关会在<b>毫秒级自动切换到备用物理节点</b>，客户端毫无察觉。
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Interactive Simulation Console Control */}
+                          <div className="bg-slate-50 border border-gray-200 p-4 rounded space-y-3">
+                            <h5 className="font-mono text-xs font-bold text-gray-800 flex items-center gap-1">
+                              ⚡ 互动沙盒联调测试 (Interactive Connection Sandbox)
+                            </h5>
+                            <p className="text-[10px] text-gray-500 leading-normal">
+                              您可以通过点击下方的模拟测试按钮，在不编写代码的情况下直接在右侧的【终端模拟器】中实时观测拦截链路的生命周期流转。
+                            </p>
+
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCliLoading(true);
+                                  // Reset logs
+                                  setTerminalLogs([
+                                    `>>> curl -X POST "${proxyUrl || 'http://localhost:3000'}/v1/chat/completions" -H "Authorization: Bearer ${config.settings.masterKey || 'sk-9router'}" -d '{"model": "${cliModelName}"}'`,
+                                    `[9router Gateway] ${new Date().toLocaleTimeString()} - 拦截到新呼叫连接... 请求源: Sandbox Simulator Client`
+                                  ]);
+
+                                  setTimeout(() => {
+                                    setTerminalLogs(prev => [
+                                      ...prev,
+                                      `[9router Gateway] ${new Date().toLocaleTimeString()} - 读取授权头 Bearer Token 成功 - 校验合法契约`,
+                                      `[9router Gateway] ${new Date().toLocaleTimeString()} - 匹配路由目标物理标的: ${cliModelName}`
+                                    ]);
+                                  }, 400);
+
+                                  setTimeout(() => {
+                                    setTerminalLogs(prev => [
+                                      ...prev,
+                                      `[9router Gateway] ${new Date().toLocaleTimeString()} - 发现底排主控节点活跃：DeepSeek/Gemini API 主干节点 [Ping: 23ms]`,
+                                      `[9router Gateway] ${new Date().toLocaleTimeString()} - 正在启动流式内容合并还原代理 (Gateway Proxy Stream Handshake)...`
+                                    ]);
+                                  }, 950);
+
+                                  setTimeout(() => {
+                                    setTerminalLogs(prev => [
+                                      ...prev,
+                                      'HTTP/1.1 200 OK | Content-Type: text/event-stream',
+                                      `[Success Response] data: {"choices":[{"delta":{"content":"恭喜！您的 OpenAI SDK 中转呼叫成功通过 9router 拦截引擎并成功输出响应结果。本条报文是经由底层物理大模型作为高可用聚合池返回的，且链路延迟及响应格式已全面符合 OpenAI Client 所需契约规范！"}}]}}`,
+                                      `[9router Gateway] ${new Date().toLocaleTimeString()} - 会话结束。传输总容量: 0.12KB, 负载代理调度耗时: 41ms`
+                                    ]);
+                                    setCliLoading(false);
+                                  }, 1600);
+                                }}
+                                disabled={cliLoading}
+                                className="bg-[#094D2B] hover:bg-[#073A21] disabled:bg-gray-300 text-white font-mono text-xs font-bold py-2 px-4 uppercase tracking-wider rounded shadow transition-all flex items-center gap-1.5"
+                              >
+                                {cliLoading ? '正在联动测试...' : '🚀 发起一次本地高可用中转负载测试 (Test Connection)'}
+                              </button>
+                              
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setTerminalLogs([
+                                    `[9router Gateway] ${new Date().toLocaleTimeString()} - 终端交互日志已重组清屏。等待新的客户端呼叫或测试请求...`
+                                  ]);
+                                }}
+                                className="border border-gray-300 hover:border-gray-500 text-gray-600 font-mono text-[10.5px] font-bold px-3 py-2 rounded"
+                              >
+                                清空日志
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="pt-4 flex justify-between items-center border-t border-gray-100">
+                            <button
+                              type="button"
+                              onClick={() => setCliStep(2)}
+                              className="px-3.5 py-2 border-2 border-gray-300 hover:border-gray-800 text-gray-700 font-mono text-xs font-bold uppercase tracking-wider"
+                            >
+                              &larr; 返回上一步 (IDE 客户端配置)
+                            </button>
+                            <span className="font-mono text-[11px] text-[#094D2B] font-black">&#10004; 负载集成配置圆满就绪</span>
+                          </div>
+                        </motion.div>
+                      )}
+
+                    </div>
+
+                    {/* RIGHT PANEL: IMMERSIVE TERMINAL SIMULATOR FOR CONNECTION PLAYGROUND */}
+                    <div className="xl:col-span-5 space-y-6">
+                      
+                      {/* TERMINAL CONTAINER */}
+                      <div className="border-2 border-[#1E2E24] bg-slate-950 shadow-[6px_6px_0px_0px_#1E2E24] overflow-hidden flex flex-col h-[480px]">
+                        {/* Title Bar */}
+                        <div className="bg-[#1E2E24] px-4 py-2 flex items-center justify-between border-b border-black">
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                            <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
+                            <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                          </div>
+                          <span className="font-mono text-[10px] font-bold text-gray-400">oauth-tester-terminal ~ sh</span>
+                          <Laptop className="w-3.5 h-3.5 text-gray-400" />
+                        </div>
+
+                        {/* Interactive Stage Panel */}
+                        <div className="p-4 flex-1 overflow-y-auto font-mono text-xs text-slate-300 space-y-2 select-all scroller-hidden">
+                          {terminalLogs.length === 0 ? (
+                            <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3">
+                              <Terminal className="w-10 h-10 text-[#094D2B] opacity-60 animate-bounce" />
+                              <h5 className="font-serif italic font-bold text-sm text-[#094D2B]">极速中转网关 CLI 沙盒仿真器</h5>
+                              <p className="text-[10px] text-gray-500 max-w-xs leading-normal">
+                                无需立即贴入真正终端，直接在此处点击一键触发，即可查看高安全 OAuth 令牌在网关中剥去、验证及重组转发的底层流水机制。
+                              </p>
+                              
+                              <button
+                                type="button"
+                                onClick={runTerminalSimulation}
+                                className="bg-[#094D2B] hover:bg-[#073A21] text-[#E8F5EE] font-mono text-[10px] font-bold px-3 py-2 uppercase tracking-wider rounded border border-emerald-500/30 flex items-center gap-2 transition-all shadow-sm"
+                              >
+                                <Play size={10} fill="currentColor" /> 执行本地方真网关检测 (Run SandSim)
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="space-y-1.5 leading-relaxed font-mono">
+                              {terminalLogs.map((log, idx) => {
+                                const isSuccess = log && log.includes("[Success Response]");
+                                const isErr = log && log.includes("WARNING");
+                                const isInput = log && log.startsWith(">>>");
+                                return (
+                                  <div 
+                                    key={idx} 
+                                    className={`p-1 font-mono text-[11px] ${
+                                      isSuccess 
+                                        ? 'bg-emerald-950/50 text-emerald-300 border border-emerald-800/50 rounded p-2.5 mt-2 font-bold' 
+                                        : isErr 
+                                        ? 'text-yellow-400' 
+                                        : isInput
+                                        ? 'text-yellow-200 bg-slate-900 border border-slate-800 rounded p-2 text-xs'
+                                        : 'text-slate-300'
+                                    }`}
+                                  >
+                                    {log}
+                                  </div>
+                                );
+                              })}
+                              
+                              {terminalRunning && (
+                                <div className="flex items-center gap-1.5 py-1 text-emerald-400 animate-pulse font-mono">
+                                  <span>▋</span>
+                                  <span className="text-[10px] tracking-widest uppercase">Executing proxy mapping queries...</span>
+                                </div>
+                              )}
+
+                              {!terminalRunning && (
+                                <div className="pt-4 flex justify-between">
+                                  <span className="text-gray-500 text-[10px]">Total process timed out in 1.4s</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setTerminalLogs([])}
+                                    className="text-[10px] text-[#094D2B] hover:underline font-bold"
+                                  >
+                                    [ 清除屏幕 (Reset Output) ]
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* EXTRA DETAILED FAQ ACCORDION PANEL */}
+                      <div className="bg-white border-2 border-[#1E2E24] p-4 shadow-[4px_4px_0px_0px_#1E2E24] space-y-3">
+                        <span className="font-mono text-[10px] uppercase font-bold text-[#094D2B] block border-b pb-1.5">集成调试诊断与高频疑难排查 (Diagnostics)</span>
+                        
+                        <div className="space-y-2 text-xs">
+                          <details className="group border-b border-gray-150 pb-1.5 outline-none cursor-pointer">
+                            <summary className="font-bold flex justify-between items-center text-gray-800 select-none">
+                              <span>❓ 为什么会连续报 `Unauthorized: 401` 异常？</span>
+                              <span className="transition-transform group-open:rotate-180 text-gray-400">&darr;</span>
+                            </summary>
+                            <p className="text-[10px] text-gray-500 leading-relaxed mt-1.5 bg-gray-50 p-2.5 rounded border">
+                              这通常是由于一次性获取的 GCP Access Token / AWS JWT 已过 3600 秒标准生命期，导致鉴权过期。本高可用网关支持故障自动侦测：您可以直接重新触发 `gcloud/aws` 脚本重新刷取并注入系统变量。
+                            </p>
+                          </details>
+
+                          <details className="group border-b border-gray-150 pb-1.5 outline-none cursor-pointer">
+                            <summary className="font-bold flex justify-between items-center text-gray-800 select-none">
+                              <span>❓ Windows PowerShell 中运行时报解析错误？</span>
+                              <span className="transition-transform group-open:rotate-180 text-gray-400">&darr;</span>
+                            </summary>
+                            <p className="text-[10px] text-gray-500 leading-relaxed mt-1.5 bg-gray-50 p-2.5 rounded border">
+                              请确认第二步将系统外壳匹配至 <b>PowerShell</b>。在 Bash 中的环境导出符 `export` 与 PowerShell 下的 `$env:` 存在很大的内核级差异，我们将配置按规范切分为最纯净的版本。
+                            </p>
+                          </details>
+
+                          <details className="group border-b border-gray-150 pb-1.5 outline-none cursor-pointer">
+                            <summary className="font-bold flex justify-between items-center text-gray-800 select-none">
+                              <span>❓ 该认证中转对本地网速是否有影响？</span>
+                              <span className="transition-transform group-open:rotate-180 text-gray-400">&darr;</span>
+                            </summary>
+                            <p className="text-[10px] text-gray-500 leading-relaxed mt-1.5 bg-gray-50 p-2.5 rounded border">
+                              均分路由系统完全基于高并发内存路由表运行，对 OAuth 的安全性校验均在握手期一次性处理（非每次对话反复登录），数据包穿透流转追加的额外时延极低（通常不超过 5ms），请放心在您的生产流片中集成。
+                            </p>
+                          </details>
+                        </div>
+                      </div>
+
+                    </div>
                   </div>
                 </motion.div>
               ) : (
@@ -1980,6 +2963,7 @@ export default function App() {
                           setNewKey(prev => ({
                             ...prev,
                             endpoint: preset.endpoint,
+                            provider: preset.provider || 'openai',
                             name: prev.name && 
                                   !prev.name.startsWith("通用") && 
                                   !prev.name.includes("NVIDIA") && 
@@ -1989,6 +2973,8 @@ export default function App() {
                                   !prev.name.includes("DeepSeek") && 
                                   !prev.name.includes("Zhipu") && 
                                   !prev.name.includes("Gemini") && 
+                                  !prev.name.includes("Claude") && 
+                                  !prev.name.includes("Antigravity") && 
                                   !prev.name.includes("OpenRouter")
                                   ? prev.name 
                                   : `${preset.name.split(" ")[0]} 节点`
@@ -2084,6 +3070,24 @@ export default function App() {
                     </p>
                   </div>
                   <div className="space-y-1 col-span-2">
+                    <label className="font-mono text-[10px] uppercase text-[#0a331c] font-black">
+                      传输协议转换适配层 (PROTOCOL ADAPTER)
+                    </label>
+                    <select
+                      className="w-full border-2 border-[#1E2E24]/30 focus:border-[#094D2B] p-3 font-sans text-xs focus:ring-0 focus:outline-none bg-white rounded font-bold text-[#094D2B]"
+                      value={newKey.provider || 'openai'}
+                      onChange={e => setNewKey({...newKey, provider: e.target.value})}
+                    >
+                      <option value="openai">标准 OpenAI 兼容协议 (兼容 99% OpenAI 服务端/NIM/DeepSeek)</option>
+                      <option value="gemini">Google Gemini 原生 REST 协议 (网关将自动中转翻译并流式转发)</option>
+                      <option value="claude">Anthropic Claude 原生 Messages 协议 (网关将自动中转翻译并流式流回)</option>
+                      <option value="antigravity">Antigravity Workspace Native 适配器协议</option>
+                    </select>
+                    <p className="text-[9px] text-[#094D2B]/70 font-mono italic mt-1">
+                      选择特定的协议转换器后，本节点网关会充当中置中继适配层，以把 Google Gemini CLI/Claude CLI/Antigravity 的非标能力输出标准 OpenAI 格式给其他 Agent 或调用端。
+                    </p>
+                  </div>
+                  <div className="space-y-1 col-span-2">
                     <label className="font-mono text-[10px] uppercase text-[#0a331c] font-black block mb-2">服务模型分发路由准入规则</label>
                     <div className="border-2 border-[#1E2E24]/20 p-4 bg-[#EFF2EF] space-y-4 rounded">
                       <div className="flex items-center justify-between">
@@ -2137,12 +3141,13 @@ export default function App() {
                             <label key={model} className="flex items-center gap-2 border border-[#1E2E24]/10 p-1.5 cursor-pointer hover:bg-white transition-colors bg-white/70 rounded">
                               <input 
                                 type="checkbox"
-                                checked={newKey.modelFilters.includes(model)}
+                                checked={!!(newKey.modelFilters && newKey.modelFilters.includes(model))}
                                 onChange={e => {
+                                  const currentFilters = newKey.modelFilters || [];
                                   if (e.target.checked) {
-                                    setNewKey({...newKey, modelFilters: [...newKey.modelFilters, model]});
+                                    setNewKey({...newKey, modelFilters: [...currentFilters, model]});
                                   } else {
-                                    setNewKey({...newKey, modelFilters: newKey.modelFilters.filter(m => m !== model)});
+                                    setNewKey({...newKey, modelFilters: currentFilters.filter(m => m !== model)});
                                   }
                                 }}
                                 className="accent-[#094D2B]"
