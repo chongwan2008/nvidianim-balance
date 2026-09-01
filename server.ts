@@ -1074,11 +1074,17 @@ async function handleNativeTranslationRequest(
         };
 
         addLog(200, Date.now() - requestStartTime);
+        res.setHeader("x-routed-node", encodeURIComponent(key.name));
+        res.setHeader("x-routed-provider", "gemini");
+        res.setHeader("x-router-duration-ms", String(Date.now() - requestStartTime));
         res.setHeader("Content-Type", "application/json");
         res.status(200).json(openAiJson);
         return true;
       } else {
         addLog(200, Date.now() - requestStartTime);
+        res.setHeader("x-routed-node", encodeURIComponent(key.name));
+        res.setHeader("x-routed-provider", "gemini");
+        res.setHeader("x-router-duration-ms", String(Date.now() - requestStartTime));
         res.setHeader("Content-Type", "text/event-stream");
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("Connection", "keep-alive");
@@ -1578,6 +1584,8 @@ const handleOpenAiProxy = async (req: express.Request, res: express.Response) =>
           res.setHeader(key, value);
         }
       });
+      res.setHeader('x-routed-node', encodeURIComponent(selectedKey.name));
+      res.setHeader('x-router-duration-ms', String(Date.now() - startTime));
 
       // Handle streaming and tokens
       if (response.body) {

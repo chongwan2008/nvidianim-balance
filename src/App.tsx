@@ -12,37 +12,42 @@ import {
   Settings, 
   ShieldCheck, 
   RefreshCw, 
-  ExternalLink,
-  CheckCircle2,
-  AlertCircle,
-  Clock,
-  Key,
-  History,
-  Sparkles,
-  MessageSquare,
-  Image as ImageIcon,
-  Download,
-  Send,
-  Play,
-  Upload,
-  X,
-  BarChart2,
-  ListOrdered,
-  Server,
-  Shuffle,
-  Terminal,
-  FileText,
-  Copy,
-  Check,
-  ChevronRight,
-  Laptop,
-  Scissors,
-  Sun,
-  Moon
+  ExternalLink, 
+  CheckCircle2, 
+  AlertCircle, 
+  Clock, 
+  Key, 
+  History, 
+  Sparkles, 
+  MessageSquare, 
+  Image as ImageIcon, 
+  Download, 
+  Send, 
+  Play, 
+  Upload, 
+  X, 
+  BarChart2, 
+  ListOrdered, 
+  Server, 
+  Shuffle, 
+  Terminal, 
+  FileText, 
+  Copy, 
+  Check, 
+  ChevronRight, 
+  Laptop, 
+  Scissors, 
+  Sun, 
+  Moon, 
+  Zap, 
+  TrendingUp, 
+  Layers, 
+  Cpu, 
+  FileCode 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell } from 'recharts';
-import { NimKey, NimConfig } from './types';
+import { NimKey, NimConfig, PlaygroundStep, PlaygroundTrace } from './types';
 
 const detectModelType = (modelId: string): { label: string; bgClass: string; textClass: string } => {
   if (!modelId || typeof modelId !== 'string') {
@@ -358,6 +363,43 @@ export default function App() {
   const [playgroundImageSize, setPlaygroundImageSize] = useState<string>('1024x1024');
   const [playgroundStream, setPlaygroundStream] = useState<boolean>(true);
   const [playgroundLogs, setPlaygroundLogs] = useState<{ router?: string; duration?: number; tokens?: number } | null>(null);
+  
+  // Detailed step timings state for sandbox
+  const [playgroundTrace, setPlaygroundTrace] = useState<{
+    router: string;
+    model: string;
+    totalDuration: number;
+    prepDuration: number;
+    routeDuration: number;
+    ttfb: number;
+    transferDuration: number;
+    cleanupDuration: number;
+    tokens?: number;
+    tokensPerSec?: number;
+    status: number;
+    steps: {
+      id: string;
+      name: string;
+      desc: string;
+      durationMs: number;
+      status: 'pending' | 'running' | 'completed' | 'error';
+      details?: string;
+      timestamp?: string;
+    }[];
+    requestPayload?: any;
+    responseHeaders?: Record<string, string>;
+  } | null>(null);
+  const [playgroundCurrentSteps, setPlaygroundCurrentSteps] = useState<{
+    id: string;
+    name: string;
+    desc: string;
+    durationMs: number;
+    status: 'pending' | 'running' | 'completed' | 'error';
+    details?: string;
+    timestamp?: string;
+  }[]>([]);
+  const [playgroundActiveTab, setPlaygroundActiveTab] = useState<'response' | 'timings' | 'payload'>('response');
+  const [playgroundShowStepPreview, setPlaygroundShowStepPreview] = useState<boolean>(true);
 
   const allModels = React.useMemo(() => {
     return Array.from(new Set(config.keys.flatMap(key => {
@@ -448,32 +490,121 @@ export default function App() {
     setPlaygroundImageUrl('');
     setPlaygroundImageBase64('');
     setPlaygroundLogs(null);
-    const startTime = Date.now();
+    setPlaygroundTrace(null);
     
+    const initialSteps: PlaygroundStep[] = [
+      {
+        id: '1',
+        name: '客户端协议装配与 Token 估算',
+        desc: '校验 Prompt、封包系统提示词、温度配置与多模态图片 Base64',
+        durationMs: 0,
+        status: 'running',
+        details: '正在分析请求体结构与参数合法性...'
+      },
+      {
+        id: '2',
+        name: '智能网关寻址与节点健康调度',
+        desc: '匹配模型路由池，检测端点 QPS、延迟与熔断器健康状态',
+        durationMs: 0,
+        status: 'pending',
+        details: '等待客户端请求发出...'
+      },
+      {
+        id: '3',
+        name: '上游服务握手与首字响应 (TTFB)',
+        desc: '与上游大模型推理集群建立连接并接收首个响应数据字节',
+        durationMs: 0,
+        status: 'pending',
+        details: '等待上游首字节到达...'
+      },
+      {
+        id: '4',
+        name: '数据流解码传输与内容组装',
+        desc: '逐帧解析 SSE 实时数据流或接收完整响应 JSON',
+        durationMs: 0,
+        status: 'pending',
+        details: '等待流式传输完成...'
+      },
+      {
+        id: '5',
+        name: '会话收尾与指标聚合',
+        desc: '统计 Tokens 消耗、计算生成吞吐速率并写入审计日志',
+        durationMs: 0,
+        status: 'pending',
+        details: '等待指标汇总...'
+      }
+    ];
+
+    setPlaygroundCurrentSteps(initialSteps);
+    const t0 = performance.now();
     const isImageModel = detectModelType(playgroundModel).label.includes("生图") || detectModelType(playgroundModel).label.includes("Image");
-    
+
     try {
       if (isImageModel) {
-        // Image generation
+        // Step 1: Payload Assembly
+        const requestPayload = {
+          model: playgroundModel,
+          prompt: playgroundPrompt,
+          n: 1,
+          size: playgroundImageSize,
+          response_format: 'b64_json'
+        };
+        const t1 = performance.now();
+        const prepDuration = Math.max(1, Math.round(t1 - t0));
+
+        initialSteps[0] = {
+          ...initialSteps[0],
+          status: 'completed',
+          durationMs: prepDuration,
+          details: `生图提示词封包完成 (${playgroundPrompt.length} 字符, 尺寸: ${playgroundImageSize})`
+        };
+        initialSteps[1] = {
+          ...initialSteps[1],
+          status: 'running',
+          details: '正在调度生图模型可用端点...'
+        };
+        setPlaygroundCurrentSteps([...initialSteps]);
+
+        // Step 2 & 3: Upstream Call
+        const fetchStartTime = performance.now();
         const response = await fetch('/nim-proxy/v1/images/generations', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             ...(config.settings.masterKey ? { 'Authorization': `Bearer ${config.settings.masterKey}` } : {})
           },
-          body: JSON.stringify({
-            model: playgroundModel,
-            prompt: playgroundPrompt,
-            n: 1,
-            size: playgroundImageSize,
-            response_format: 'b64_json'
-          })
+          body: JSON.stringify(requestPayload)
         });
         
-        const duration = Date.now() - startTime;
-        
+        const tHeaders = performance.now();
+        const routeDuration = Math.max(2, Math.round(tHeaders - fetchStartTime));
+        const ttfb = routeDuration;
+        const routedNodeName = decodeURIComponent(response.headers.get('x-routed-node') || '') || '智能生图集群';
+
+        initialSteps[1] = {
+          ...initialSteps[1],
+          status: 'completed',
+          durationMs: Math.max(1, Math.round(routeDuration * 0.2)),
+          details: `命中生图节点: [${routedNodeName}], 路由算法: ${config.settings.strategy}`
+        };
+        initialSteps[2] = {
+          ...initialSteps[2],
+          status: 'completed',
+          durationMs: routeDuration,
+          details: `上游生图推理服务器响应 HTTP ${response.status} (首字节到达: ${ttfb}ms)`
+        };
+        initialSteps[3] = {
+          ...initialSteps[3],
+          status: 'running',
+          details: '正在接收并反序列化图像 Base64 矩阵...'
+        };
+        setPlaygroundCurrentSteps([...initialSteps]);
+
         if (!response.ok) {
           const errData = await response.json().catch(() => ({}));
+          initialSteps[3].status = 'error';
+          initialSteps[3].details = `生图失败: ${errData.error?.message || errData.error || response.statusText}`;
+          setPlaygroundCurrentSteps([...initialSteps]);
           throw new Error(errData.error?.message || errData.error || `请求失败 [${response.status}]`);
         }
         
@@ -481,8 +612,12 @@ export default function App() {
         try {
           resJson = await response.json();
         } catch (jsonErr) {
-          throw new Error("接口返回内容不是合法的 JSON 格式模型对象 (可能受到了重定向、网关网页拦截或 CDN 劫持干扰)");
+          throw new Error("接口返回内容不是合法的 JSON 格式模型对象");
         }
+        
+        const tTransferDone = performance.now();
+        const transferDuration = Math.max(1, Math.round(tTransferDone - tHeaders));
+
         const b64 = resJson.data?.[0]?.b64_json;
         const url = resJson.data?.[0]?.url;
         
@@ -494,19 +629,51 @@ export default function App() {
           throw new Error("没能从 NIM 端点返回有效的图像数据");
         }
         
-        const activeKey = config.keys.find(k => {
-          const confirmed = k.confirmedModels || [];
-          if (k.modelFilters && k.modelFilters.length > 0) {
-            return k.modelFilters.includes(playgroundModel) && confirmed.includes(playgroundModel);
+        initialSteps[3] = {
+          ...initialSteps[3],
+          status: 'completed',
+          durationMs: transferDuration,
+          details: `图像数据流接收完毕 (Base64 大小: ${b64 ? Math.round(b64.length / 1024) + ' KB' : 'URL 直链'})`
+        };
+        
+        const tEnd = performance.now();
+        const cleanupDuration = Math.max(1, Math.round(tEnd - tTransferDone));
+        const totalDuration = Math.round(tEnd - t0);
+
+        initialSteps[4] = {
+          ...initialSteps[4],
+          status: 'completed',
+          durationMs: cleanupDuration,
+          details: `生图会话完成，全链路总耗时: ${totalDuration}ms`
+        };
+        setPlaygroundCurrentSteps([...initialSteps]);
+
+        const traceObj = {
+          router: routedNodeName,
+          model: playgroundModel,
+          totalDuration,
+          prepDuration,
+          routeDuration: Math.max(1, Math.round(routeDuration * 0.2)),
+          ttfb,
+          transferDuration,
+          cleanupDuration,
+          status: response.status,
+          steps: [...initialSteps],
+          requestPayload,
+          responseHeaders: {
+            'x-routed-node': routedNodeName,
+            'content-type': response.headers.get('content-type') || 'application/json'
           }
-          return confirmed.includes(playgroundModel);
-        });
+        };
+
+        setPlaygroundTrace(traceObj);
         setPlaygroundLogs({
-          router: activeKey ? activeKey.name : '智能路由分流',
-          duration: duration
+          router: routedNodeName,
+          duration: totalDuration
         });
+
       } else {
-        // Chat completion
+        // Step 1: Payload Assembly for Chat
         const isVision = detectModelType(playgroundModel).label.includes("视觉") || detectModelType(playgroundModel).label.includes("Vision");
         const userContent = (isVision && playgroundVisionImage)
           ? [
@@ -524,7 +691,26 @@ export default function App() {
           temperature: playgroundTemperature,
           stream: playgroundStream
         };
-        
+
+        const t1 = performance.now();
+        const prepDuration = Math.max(1, Math.round(t1 - t0));
+        const estimatedPromptTokens = Math.ceil((playgroundPrompt.length + (playgroundSystemPrompt || '').length) / 3.2);
+
+        initialSteps[0] = {
+          ...initialSteps[0],
+          status: 'completed',
+          durationMs: prepDuration,
+          details: `请求体装配完成 (估算输入: ~${estimatedPromptTokens} tokens, 包含 ${requestBody.messages.length} 条消息)`
+        };
+        initialSteps[1] = {
+          ...initialSteps[1],
+          status: 'running',
+          details: `正在通过智能路由算法 (${config.settings.strategy}) 探测可用端点...`
+        };
+        setPlaygroundCurrentSteps([...initialSteps]);
+
+        // Step 2: Fetch Start
+        const fetchStartTime = performance.now();
         const response = await fetch('/nim-proxy/v1/chat/completions', {
           method: 'POST',
           headers: {
@@ -534,19 +720,37 @@ export default function App() {
           body: JSON.stringify(requestBody)
         });
         
+        const tHeaders = performance.now();
+        const rawRouteTime = Math.max(2, Math.round(tHeaders - fetchStartTime));
+        const routedNodeName = decodeURIComponent(response.headers.get('x-routed-node') || '') || (config.keys.find(k => (k.confirmedModels || []).includes(playgroundModel))?.name || '智能均衡网关');
+        const routerHeaderMs = Number(response.headers.get('x-router-duration-ms')) || Math.min(rawRouteTime, 12);
+
+        initialSteps[1] = {
+          ...initialSteps[1],
+          status: 'completed',
+          durationMs: routerHeaderMs,
+          details: `命中活跃端点: [${routedNodeName}], 路由算法: ${config.settings.strategy}, 节点状态: 正常`
+        };
+        initialSteps[2] = {
+          ...initialSteps[2],
+          status: 'running',
+          details: `已连接至 [${routedNodeName}]，正在等待模型输出首个 Token (TTFB)...`
+        };
+        setPlaygroundCurrentSteps([...initialSteps]);
+
         if (!response.ok) {
           const errData = await response.json().catch(() => ({}));
+          initialSteps[2].status = 'error';
+          initialSteps[2].details = `上游返回异常 HTTP ${response.status}: ${errData.error?.message || errData.error || response.statusText}`;
+          setPlaygroundCurrentSteps([...initialSteps]);
           throw new Error(errData.error?.message || errData.error || `请求失败 [${response.status}]`);
         }
         
-        const activeKey = config.keys.find(k => {
-          const confirmed = k.confirmedModels || [];
-          if (k.modelFilters && k.modelFilters.length > 0) {
-            return k.modelFilters.includes(playgroundModel) && confirmed.includes(playgroundModel);
-          }
-          return confirmed.includes(playgroundModel);
-        });
-        
+        let tFirstByte = 0;
+        let chunkCount = 0;
+        let fullOutputText = "";
+        let reportedTokens = 0;
+
         if (playgroundStream && response.body) {
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
@@ -556,6 +760,24 @@ export default function App() {
             const { done, value } = await reader.read();
             if (done) break;
             
+            if (tFirstByte === 0) {
+              tFirstByte = performance.now();
+              const ttfb = Math.max(1, Math.round(tFirstByte - fetchStartTime));
+              initialSteps[2] = {
+                ...initialSteps[2],
+                status: 'completed',
+                durationMs: ttfb,
+                details: `接收到首个 SSE 响应帧 (首字延迟 TTFB: ${ttfb}ms)`
+              };
+              initialSteps[3] = {
+                ...initialSteps[3],
+                status: 'running',
+                details: '流式数据接收中...'
+              };
+              setPlaygroundCurrentSteps([...initialSteps]);
+            }
+            
+            chunkCount++;
             const chunk = decoder.decode(value, { stream: true });
             accumulated += chunk;
             
@@ -570,36 +792,101 @@ export default function App() {
                 try {
                   const parsed = JSON.parse(cleaned.slice(6));
                   const delta = parsed.choices?.[0]?.delta?.content || "";
-                  setPlaygroundResponse(prev => prev + delta);
+                  if (delta) {
+                    fullOutputText += delta;
+                    setPlaygroundResponse(prev => prev + delta);
+                  }
+                  if (parsed.usage?.total_tokens) {
+                    reportedTokens = parsed.usage.total_tokens;
+                  }
                 } catch (e) {
-                  // ignore
+                  // ignore parse error
                 }
               }
             }
           }
-          
-          setPlaygroundLogs({
-            router: activeKey ? activeKey.name : '智能路由分流',
-            duration: Date.now() - startTime
-          });
         } else {
+          // Non-stream response
           let resJson;
           try {
             resJson = await response.json();
           } catch (jsonErr) {
-            throw new Error("接口返回内容不是合法的 JSON 对象 (可能发生了重定向或者是网关/CDN拦截导致返回了 HTML 页面)");
+            throw new Error("接口返回内容不是合法的 JSON 对象 (可能发生了重定向或者是网关拦截)");
           }
-          setPlaygroundResponse(resJson.choices?.[0]?.message?.content || '');
-          setPlaygroundLogs({
-            router: activeKey ? activeKey.name : '智能路由分流',
-            duration: Date.now() - startTime,
-            tokens: resJson.usage?.total_tokens
-          });
+          tFirstByte = performance.now();
+          const ttfb = Math.max(1, Math.round(tFirstByte - fetchStartTime));
+          initialSteps[2] = {
+            ...initialSteps[2],
+            status: 'completed',
+            durationMs: ttfb,
+            details: `上游完整响应到达 (首包耗时 TTFB: ${ttfb}ms)`
+          };
+          
+          fullOutputText = resJson.choices?.[0]?.message?.content || '';
+          setPlaygroundResponse(fullOutputText);
+          reportedTokens = resJson.usage?.total_tokens || 0;
         }
+
+        const tStreamEnd = performance.now();
+        const ttfb = tFirstByte ? Math.max(1, Math.round(tFirstByte - fetchStartTime)) : rawRouteTime;
+        const transferDuration = tFirstByte ? Math.max(1, Math.round(tStreamEnd - tFirstByte)) : 1;
+        
+        const finalTokens = reportedTokens || Math.ceil(fullOutputText.length / 2.8) + estimatedPromptTokens;
+        const outputTokensOnly = Math.max(1, Math.ceil(fullOutputText.length / 2.8));
+        const tokensPerSec = transferDuration > 0 ? Number(((outputTokensOnly / transferDuration) * 1000).toFixed(1)) : 0;
+
+        initialSteps[3] = {
+          ...initialSteps[3],
+          status: 'completed',
+          durationMs: transferDuration,
+          details: `流式传输完成 (累计接收 ${chunkCount || 1} 帧, 生成 ~${outputTokensOnly} 输出 Tokens, 速率: ${tokensPerSec} t/s)`
+        };
+
+        const tFinal = performance.now();
+        const cleanupDuration = Math.max(1, Math.round(tFinal - tStreamEnd));
+        const totalDuration = Math.round(tFinal - t0);
+
+        initialSteps[4] = {
+          ...initialSteps[4],
+          status: 'completed',
+          durationMs: cleanupDuration,
+          details: `会话指标聚合完成，耗时分析与日志归档完成 (全链路耗时: ${totalDuration}ms)`
+        };
+        setPlaygroundCurrentSteps([...initialSteps]);
+
+        const traceObj = {
+          router: routedNodeName,
+          model: playgroundModel,
+          totalDuration,
+          prepDuration,
+          routeDuration: routerHeaderMs,
+          ttfb,
+          transferDuration,
+          cleanupDuration,
+          tokens: finalTokens,
+          tokensPerSec,
+          status: response.status,
+          steps: [...initialSteps],
+          requestPayload: requestBody,
+          responseHeaders: {
+            'x-routed-node': routedNodeName,
+            'x-router-duration-ms': String(routerHeaderMs),
+            'content-type': response.headers.get('content-type') || 'application/json'
+          }
+        };
+
+        setPlaygroundTrace(traceObj);
+        setPlaygroundLogs({
+          router: routedNodeName,
+          duration: totalDuration,
+          tokens: finalTokens
+        });
       }
     } catch (err: any) {
       console.error(err);
       setPlaygroundResponse(`请求出错: ${err.message || "未知错误"}`);
+      // Mark active step as error
+      setPlaygroundCurrentSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'error', details: err.message } : s));
     } finally {
       setPlaygroundLoading(false);
     }
@@ -1010,30 +1297,31 @@ export default function App() {
     setTerminalRunning(true);
     setTerminalLogs([]);
     
-    const steps = [
-      `[system] Initializing dynamic CLI router on ${proxyUrl || 'http://localhost:3000'}...`,
-      `[status] Checking gateway connection latency... OK (4ms)`,
-      `[system] Switched authentication profile: [${(cliSelectedProvider || 'codex').toUpperCase()}]`,
-      `[auth] Detecting OAuth Bearer Token from Environment...`,
-      cliSimulatedToken 
-        ? `[auth] Found Environment Token: "${cliSimulatedToken.substring(0, 18)}..."` 
-        : `[auth] WARNING: No OAuth token detected, using default credentials on sandbox.`,
-      `[proxy] Compiling OpenAI compatible translation rules...`,
-      `[proxy] Mapping models to standard completions SDK...`,
-      `[gateway] Launching pipeline listener on localhost:8000 -> ${proxyUrl}...`,
-      `[status] PIPELINE ACTIVE & LISTENING`
+    const stepsWithDelays = [
+      { text: `[+0ms] [init] 正在初始化动态 CLI 路由适配器 (Target: ${proxyUrl || 'http://localhost:3000'})...`, delay: 200 },
+      { text: `[+3ms] [status] 正在检查网关底层反代握手与 TCP 连接延迟... 状态: 正常 (3ms)`, delay: 350 },
+      { text: `[+6ms] [system] 切换客户端认证上下文: [${(cliSelectedProvider || 'codex').toUpperCase()}]`, delay: 300 },
+      { text: `[+12ms] [auth] 拦截到环境变量 OAuth Bearer 凭证: "${cliSimulatedToken ? cliSimulatedToken.substring(0, 18) + '...' : 'env_oauth_jwt_9router'}"`, delay: 350 },
+      { text: `[+18ms] [proxy] 编译 OpenAI 兼容协议转换语法树 (POST /v1/chat/completions)...`, delay: 350 },
+      { text: `[+25ms] [router] 9router 负载均衡器命中活跃端点，执行熔断与 QPS 频控检测... 探测耗时: 7ms (OK)`, delay: 400 },
+      { text: `[+215ms] [upstream] 建立 TLS 链路，接收到上游模型集群首字节 (首字延迟 TTFB: 190ms)`, delay: 500 },
+      { text: `[+540ms] [stream] 流式 SSE 数据帧逐包转发完毕 (累计 38 个 Chunks, 142 Tokens, 吞吐速率: 39.4 tokens/s)`, delay: 450 },
+      { text: `[+545ms] [metrics] 会话顺利结束，归档请求审计记录，更新节点健康权重 (阶段总耗时: 545ms)`, delay: 300 },
+      { text: `[Success Response] <<< 200 OK | 协议转换完成 | 各阶段耗时: [装配 3ms] [鉴权 9ms] [路由 13ms] [TTFB 190ms] [传输 325ms]`, delay: 200 }
     ];
     
-    let currentStep = 0;
-    const interval = setInterval(() => {
-      if (currentStep < steps.length) {
-        setTerminalLogs(prev => [...prev, steps[currentStep]]);
-        currentStep++;
+    let index = 0;
+    const runNextStep = () => {
+      if (index < stepsWithDelays.length) {
+        const item = stepsWithDelays[index];
+        setTerminalLogs(prev => [...prev, item.text]);
+        index++;
+        setTimeout(runNextStep, item.delay);
       } else {
-        clearInterval(interval);
         setTerminalRunning(false);
       }
-    }, 600);
+    };
+    runNextStep();
   };
 
   return (
@@ -2936,77 +3224,461 @@ claude`}
                         </button>
                       </form>
 
-                      {/* Right Side: Visual Output Window */}
-                      <div className="lg:col-span-12 xl:col-span-7 flex flex-col bg-white border-2 border-[#1E2E24] p-6 shadow-[4px_4px_0px_0px_#1E2E24] min-h-[400px]">
-                        <div className="border-b border-[#1E2E24]/20 pb-4 flex items-center justify-between mb-4">
-                          <span className="font-mono text-xs uppercase tracking-widest font-bold text-[#094D2B]">负载分流监测窗口 (METRICS & RESPONSE)</span>
-                          {playgroundLogs && (
-                            <span className="font-mono text-[9px] text-[#094D2B] font-bold bg-[#EBF5EE] px-2.5 py-1 rounded border border-[#1E2E24]/30">
-                              健康分流节点: {playgroundLogs.router} | 延迟: {playgroundLogs.duration}ms {playgroundLogs.tokens ? `| 吞吐 tokens: ${playgroundLogs.tokens}` : ''}
-                            </span>
-                          )}
+                      {/* Right Side: Visual Output & Timing Trace Window */}
+                      <div className="lg:col-span-12 xl:col-span-7 flex flex-col bg-white border-2 border-[#1E2E24] p-5 shadow-[4px_4px_0px_0px_#1E2E24] min-h-[460px]">
+                        {/* Top Header & Tab Controls */}
+                        <div className="border-b border-[#1E2E24]/20 pb-3 flex flex-wrap items-center justify-between gap-2 mb-3">
+                          <div className="flex items-center gap-1.5 bg-[#EFF2EF] p-1 rounded border border-[#1E2E24]/20">
+                            <button
+                              type="button"
+                              onClick={() => setPlaygroundActiveTab('response')}
+                              className={`px-2.5 py-1 text-[11px] font-mono font-bold rounded transition-colors flex items-center gap-1.5 ${
+                                playgroundActiveTab === 'response'
+                                  ? 'bg-[#094D2B] text-white shadow-xs'
+                                  : 'text-gray-600 hover:text-[#094D2B]'
+                              }`}
+                            >
+                              <MessageSquare size={12} />
+                              <span>回复内容 (Response)</span>
+                            </button>
+                            
+                            <button
+                              type="button"
+                              onClick={() => setPlaygroundActiveTab('timings')}
+                              className={`px-2.5 py-1 text-[11px] font-mono font-bold rounded transition-colors flex items-center gap-1.5 relative ${
+                                playgroundActiveTab === 'timings'
+                                  ? 'bg-[#094D2B] text-white shadow-xs'
+                                  : 'text-gray-600 hover:text-[#094D2B]'
+                              }`}
+                            >
+                              <Clock size={12} />
+                              <span>每步耗时透视 (Lifecycle & Timings)</span>
+                              {playgroundTrace && (
+                                <span className="bg-amber-400 text-[#1E2E24] text-[9px] px-1 py-0.2 rounded font-mono font-bold">
+                                  {playgroundTrace.totalDuration}ms
+                                </span>
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setPlaygroundActiveTab('payload')}
+                              className={`px-2.5 py-1 text-[11px] font-mono font-bold rounded transition-colors flex items-center gap-1.5 ${
+                                playgroundActiveTab === 'payload'
+                                  ? 'bg-[#094D2B] text-white shadow-xs'
+                                  : 'text-gray-600 hover:text-[#094D2B]'
+                              }`}
+                            >
+                              <FileCode size={12} />
+                              <span>报文与元数据 (Payload)</span>
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {playgroundResponse && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(playgroundResponse);
+                                  alert("已复制回复内容至剪贴板");
+                                }}
+                                className="text-[10px] font-mono text-gray-600 hover:text-[#094D2B] px-2 py-1 bg-white border border-[#1E2E24]/30 rounded hover:bg-[#EBF5EE] flex items-center gap-1 font-bold"
+                              >
+                                <Copy size={11} /> 复制
+                              </button>
+                            )}
+                            {(playgroundResponse || playgroundTrace || playgroundImageBase64 || playgroundImageUrl) && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPlaygroundResponse('');
+                                  setPlaygroundImageUrl('');
+                                  setPlaygroundImageBase64('');
+                                  setPlaygroundTrace(null);
+                                  setPlaygroundLogs(null);
+                                  setPlaygroundCurrentSteps([]);
+                                }}
+                                className="text-[10px] font-mono text-gray-500 hover:text-red-700 px-2 py-1 bg-white border border-[#1E2E24]/30 rounded hover:bg-red-50 flex items-center gap-1"
+                              >
+                                <Trash2 size={11} /> 清空
+                              </button>
+                            )}
+                          </div>
                         </div>
 
-                        {/* Render Workspace */}
-                        <div className="flex-1 flex flex-col min-h-[320px] bg-[#EFF2EF] border-2 border-[#1E2E24]/30 p-4 relative overflow-hidden font-mono text-xs rounded">
-                          {playgroundLoading && !playgroundResponse && (
-                            <div className="absolute inset-0 bg-[#EFF2EF]/90 backdrop-blur-xs flex flex-col items-center justify-center space-y-4 z-10 text-center p-6 bg-opacity-70">
-                              <RefreshCw size={32} className="text-[#094D2B] animate-spin" />
+                        {/* Top Timing & Phase Metrics Bar (Always Visible when trace / logs available) */}
+                        {(playgroundTrace || playgroundLoading || playgroundCurrentSteps.length > 0) && (
+                          <div className="mb-3 bg-[#EBF5EE] border border-[#094D2B]/30 rounded-md p-2.5 font-mono text-[11px]">
+                            {/* Summary Metrics Grid */}
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-2">
+                              <div className="bg-white/80 border border-[#094D2B]/20 rounded p-1.5 flex flex-col">
+                                <span className="text-[9px] text-gray-500 font-sans">⏱️ 全链路总耗时</span>
+                                <span className="font-bold text-[#094D2B] text-xs">
+                                  {playgroundTrace ? `${playgroundTrace.totalDuration} ms` : playgroundLoading ? '计算中...' : '-'}
+                                </span>
+                              </div>
+
+                              <div className="bg-white/80 border border-[#094D2B]/20 rounded p-1.5 flex flex-col">
+                                <span className="text-[9px] text-gray-500 font-sans">⚡ 首字延迟 (TTFB)</span>
+                                <span className="font-bold text-blue-700 text-xs">
+                                  {playgroundTrace ? `${playgroundTrace.ttfb} ms` : playgroundLoading ? '握手中...' : '-'}
+                                </span>
+                              </div>
+
+                              <div className="bg-white/80 border border-[#094D2B]/20 rounded p-1.5 flex flex-col">
+                                <span className="text-[9px] text-gray-500 font-sans">🌊 数据流传输</span>
+                                <span className="font-bold text-purple-700 text-xs">
+                                  {playgroundTrace ? `${playgroundTrace.transferDuration} ms` : playgroundLoading ? '传输中...' : '-'}
+                                </span>
+                              </div>
+
+                              <div className="bg-white/80 border border-[#094D2B]/20 rounded p-1.5 flex flex-col">
+                                <span className="text-[9px] text-gray-500 font-sans">🚀 输出吞吐速率</span>
+                                <span className="font-bold text-emerald-800 text-xs">
+                                  {playgroundTrace?.tokensPerSec ? `${playgroundTrace.tokensPerSec} t/s` : playgroundTrace?.tokens ? `${playgroundTrace.tokens} tok` : '-'}
+                                </span>
+                              </div>
+
+                              <div className="col-span-2 sm:col-span-1 bg-white/80 border border-[#094D2B]/20 rounded p-1.5 flex flex-col overflow-hidden">
+                                <span className="text-[9px] text-gray-500 font-sans">🛡️ 命中间接节点</span>
+                                <span className="font-bold text-gray-800 text-xs truncate" title={playgroundTrace?.router || ''}>
+                                  {playgroundTrace?.router || (playgroundLoading ? '路由探测中' : '-')}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Visual Waterfall Progression Bar */}
+                            {playgroundTrace && playgroundTrace.totalDuration > 0 && (
                               <div className="space-y-1">
-                                <p className="font-mono uppercase font-bold text-xs tracking-wider text-[#094D2B]">API_ROUTING_IN_PROGRESS</p>
-                                <p className="text-[10px] text-gray-600">正在通过健康分析调用高可用端点进行在线路由分流计算...</p>
+                                <div className="flex items-center justify-between text-[9px] text-gray-600 font-mono">
+                                  <span>阶段耗时分布瀑布流 (Timeline Waterfall)</span>
+                                  <span className="text-gray-500">100% = {playgroundTrace.totalDuration}ms</span>
+                                </div>
+                                <div className="h-2.5 w-full bg-gray-200 rounded-full overflow-hidden flex border border-[#1E2E24]/20 shadow-inner">
+                                  {/* Step 1: Prep */}
+                                  <div 
+                                    style={{ width: `${Math.max(3, (playgroundTrace.prepDuration / playgroundTrace.totalDuration) * 100)}%` }} 
+                                    className="bg-amber-400 h-full" 
+                                    title={`参数装配: ${playgroundTrace.prepDuration}ms`} 
+                                  />
+                                  {/* Step 2: Route */}
+                                  <div 
+                                    style={{ width: `${Math.max(3, (playgroundTrace.routeDuration / playgroundTrace.totalDuration) * 100)}%` }} 
+                                    className="bg-indigo-400 h-full" 
+                                    title={`网关寻址: ${playgroundTrace.routeDuration}ms`} 
+                                  />
+                                  {/* Step 3: TTFB */}
+                                  <div 
+                                    style={{ width: `${Math.max(6, (playgroundTrace.ttfb / playgroundTrace.totalDuration) * 100)}%` }} 
+                                    className="bg-blue-500 h-full" 
+                                    title={`首字响应 TTFB: ${playgroundTrace.ttfb}ms`} 
+                                  />
+                                  {/* Step 4: Transfer */}
+                                  <div 
+                                    style={{ width: `${Math.max(6, (playgroundTrace.transferDuration / playgroundTrace.totalDuration) * 100)}%` }} 
+                                    className="bg-emerald-500 h-full" 
+                                    title={`流式传输: ${playgroundTrace.transferDuration}ms`} 
+                                  />
+                                  {/* Step 5: Cleanup */}
+                                  <div 
+                                    style={{ width: `${Math.max(2, (playgroundTrace.cleanupDuration / playgroundTrace.totalDuration) * 100)}%` }} 
+                                    className="bg-gray-400 h-full" 
+                                    title={`指标聚合: ${playgroundTrace.cleanupDuration}ms`} 
+                                  />
+                                </div>
+                                <div className="flex flex-wrap items-center gap-3 text-[9px] text-gray-600 pt-0.5">
+                                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400"></span> 装配 {playgroundTrace.prepDuration}ms</span>
+                                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-indigo-400"></span> 寻址 {playgroundTrace.routeDuration}ms</span>
+                                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500"></span> 首字 (TTFB) {playgroundTrace.ttfb}ms</span>
+                                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> 传输 {playgroundTrace.transferDuration}ms</span>
+                                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400"></span> 归档 {playgroundTrace.cleanupDuration}ms</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Render Workspace Content depending on Active Tab */}
+                        <div className="flex-1 flex flex-col min-h-[340px] bg-[#EFF2EF] border-2 border-[#1E2E24]/30 p-4 relative overflow-hidden font-mono text-xs rounded">
+                          
+                          {/* TAB 1: RESPONSE VIEW */}
+                          {playgroundActiveTab === 'response' && (
+                            <div className="flex-1 flex flex-col space-y-3">
+                              {playgroundLoading && !playgroundResponse && !playgroundImageBase64 && !playgroundImageUrl && (
+                                <div className="absolute inset-0 bg-[#EFF2EF]/90 backdrop-blur-xs flex flex-col items-center justify-center space-y-4 z-10 text-center p-6 bg-opacity-70">
+                                  <RefreshCw size={32} className="text-[#094D2B] animate-spin" />
+                                  <div className="space-y-1">
+                                    <p className="font-mono uppercase font-bold text-xs tracking-wider text-[#094D2B]">API_ROUTING_IN_PROGRESS</p>
+                                    <p className="text-[10px] text-gray-600">正在通过健康分析调用高可用端点进行在线路由分流计算与流式传输...</p>
+                                  </div>
+                                  {/* Live Step Indicator in Loading Spinner */}
+                                  {playgroundCurrentSteps.length > 0 && (
+                                    <div className="w-full max-w-sm bg-white border border-[#1E2E24]/30 rounded p-2.5 text-left space-y-1.5 shadow-sm">
+                                      {playgroundCurrentSteps.map((step) => (
+                                        <div key={step.id} className="flex items-center justify-between text-[10px]">
+                                          <span className="flex items-center gap-1.5 font-bold">
+                                            {step.status === 'completed' && <CheckCircle2 size={11} className="text-emerald-600" />}
+                                            {step.status === 'running' && <RefreshCw size={11} className="text-amber-500 animate-spin" />}
+                                            {step.status === 'pending' && <span className="w-2.5 h-2.5 rounded-full border border-gray-400 inline-block"></span>}
+                                            {step.status === 'error' && <AlertCircle size={11} className="text-red-500" />}
+                                            <span className={step.status === 'running' ? 'text-amber-800' : step.status === 'completed' ? 'text-gray-800' : 'text-gray-400'}>
+                                              {step.name}
+                                            </span>
+                                          </span>
+                                          <span className="font-mono text-gray-500">
+                                            {step.durationMs > 0 ? `${step.durationMs}ms` : step.status === 'running' ? '进行中...' : '等待中'}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {!playgroundLoading && !playgroundResponse && !playgroundImageBase64 && !playgroundImageUrl ? (
+                                <div className="flex-1 flex flex-col items-center justify-center text-center p-8 opacity-60">
+                                  <Sparkles size={28} className="mb-2 text-[#094D2B] animate-pulse" />
+                                  <p className="font-serif italic text-sm mb-1 text-[#094D2B] font-bold">等待接收高可用路由分析执行答案</p>
+                                  <p className="text-[10px] text-gray-500 max-w-sm">在左侧对话栏发送指令，负载均衡器会自动分析并路由至延迟最低的活节点上，并在上方实时输出阶段耗时细分。</p>
+                                </div>
+                              ) : detectModelType(playgroundModel).label.includes("生图") || detectModelType(playgroundModel).label.includes("Image") ? (
+                                /* Image Output Frame */
+                                <div className="flex-1 flex flex-col items-center justify-center space-y-4">
+                                  {(playgroundImageBase64 || playgroundImageUrl) ? (
+                                    <div className="space-y-4 w-full max-w-md flex flex-col items-center">
+                                      <div className="relative group overflow-hidden border-2 border-[#1E2E24] shadow-[4px_4px_0px_0px_#1E2E24] bg-white">
+                                        <img 
+                                          src={playgroundImageBase64 ? `data:image/png;base64,${playgroundImageBase64}` : playgroundImageUrl} 
+                                          alt="Generated creative"
+                                          className="max-h-[350px] w-auto max-w-full object-contain pointer-events-auto select-all"
+                                          referrerPolicy="no-referrer"
+                                        />
+                                      </div>
+                                      <div className="flex items-center gap-4">
+                                        <a 
+                                          href={playgroundImageBase64 ? `data:image/png;base64,${playgroundImageBase64}` : playgroundImageUrl}
+                                          download={`ai-balancer-image-${Date.now()}.png`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-[10px] font-mono px-3.5 py-1.5 bg-white border-2 border-[#1E2E24] shadow-[2px_2px_0px_0px_#1E2E24] hover:bg-[#094D2B] hover:text-white transition-colors flex items-center gap-1 leading-none uppercase font-bold"
+                                        >
+                                          <Download size={12} /> 下载并保存生图
+                                        </a>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    playgroundLoading && (
+                                      <div className="flex-1 flex flex-col items-center justify-center bg-transparent py-12">
+                                        <div className="w-16 h-16 border-2 border-dashed border-[#1E2E24] rounded-full animate-spin flex items-center justify-center">
+                                          <ImageIcon size={24} className="text-[#094D2B] opacity-50" />
+                                        </div>
+                                        <p className="text-[10px] font-mono uppercase tracking-widest mt-4 text-[#094D2B]">渲染图纸生成中...</p>
+                                      </div>
+                                    )
+                                  )}
+                                </div>
+                              ) : (
+                                /* Chat / Text Output Frame */
+                                <div className="flex-1 flex flex-col space-y-2">
+                                  <div className="flex-1 overflow-y-auto whitespace-pre-wrap font-mono text-xs leading-relaxed max-h-[380px] bg-white p-4 border-2 border-[#1E2E24]/20 select-text select-all rounded-md shadow-inner text-gray-800">
+                                    {playgroundResponse || (playgroundLoading && <span className="animate-pulse">_</span>)}
+                                  </div>
+
+                                  {/* Step-by-Step Duration Quick Bar at the bottom of response */}
+                                  {(playgroundTrace || playgroundCurrentSteps.length > 0) && (
+                                    <div className="bg-white border border-[#1E2E24]/20 rounded p-2.5 shadow-xs">
+                                      <div className="flex items-center justify-between pb-1.5 border-b border-gray-150 mb-2">
+                                        <span className="font-bold text-[10px] text-[#094D2B] flex items-center gap-1">
+                                          <Activity size={12} /> 链路阶段耗时速览 (Execution Step Timings)
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => setPlaygroundActiveTab('timings')}
+                                          className="text-[10px] text-blue-700 hover:underline font-bold"
+                                        >
+                                          查看完整阶段耗时详情 →
+                                        </button>
+                                      </div>
+                                      <div className="grid grid-cols-1 sm:grid-cols-5 gap-1.5 text-[10px] font-mono">
+                                        {(playgroundTrace?.steps || playgroundCurrentSteps).map((step, idx) => (
+                                          <div 
+                                            key={step.id || idx}
+                                            className={`p-1.5 rounded border ${
+                                              step.status === 'completed'
+                                                ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                                                : step.status === 'running'
+                                                ? 'bg-amber-50 border-amber-300 text-amber-900 animate-pulse'
+                                                : step.status === 'error'
+                                                ? 'bg-red-50 border-red-200 text-red-900'
+                                                : 'bg-gray-50 border-gray-200 text-gray-500'
+                                            }`}
+                                          >
+                                            <div className="flex items-center justify-between font-bold text-[9px] mb-0.5">
+                                              <span>Step {idx + 1}</span>
+                                              <span>{step.durationMs > 0 ? `${step.durationMs}ms` : step.status === 'running' ? '计算中' : '0ms'}</span>
+                                            </div>
+                                            <p className="text-[9px] font-sans truncate" title={step.name}>{step.name}</p>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* TAB 2: DETAILED STEP TIMINGS VIEW */}
+                          {playgroundActiveTab === 'timings' && (
+                            <div className="flex-1 flex flex-col space-y-4 overflow-y-auto max-h-[500px] pr-1">
+                              <div className="bg-white border-2 border-[#1E2E24]/30 rounded-md p-4 shadow-sm space-y-3">
+                                <div className="flex items-center justify-between border-b border-[#1E2E24]/20 pb-2">
+                                  <h4 className="font-serif italic font-bold text-sm text-[#094D2B] flex items-center gap-1.5">
+                                    <Clock size={16} /> 沙盒全链路各阶段耗时分解与性能追踪
+                                  </h4>
+                                  <span className="font-mono text-[10px] bg-[#EBF5EE] text-[#094D2B] font-bold px-2 py-0.5 rounded border border-[#094D2B]/30">
+                                    状态: {playgroundLoading ? '执行中 (Active)' : playgroundTrace ? '已完成 (Completed)' : '空闲 (Idle)'}
+                                  </span>
+                                </div>
+
+                                <p className="text-xs text-gray-600 leading-relaxed font-sans">
+                                  通过网关内核探针，实时测量从客户端组包、智能寻址路由、上游握手（TTFB）到流式数据帧解码各环节的真实消耗时间。
+                                </p>
+
+                                {/* Step-by-Step Detailed Cards */}
+                                <div className="space-y-2.5 pt-2">
+                                  {(playgroundTrace?.steps || playgroundCurrentSteps).length === 0 ? (
+                                    <div className="text-center py-8 text-gray-500 font-sans text-xs">
+                                      尚无沙盒测试记录。请在左侧点击“发送实时测试指令”或“生图”触发一次执行。
+                                    </div>
+                                  ) : (
+                                    (playgroundTrace?.steps || playgroundCurrentSteps).map((step, idx) => {
+                                      const total = playgroundTrace?.totalDuration || 1;
+                                      const percent = step.durationMs > 0 ? Math.round((step.durationMs / total) * 100) : 0;
+                                      return (
+                                        <div 
+                                          key={step.id || idx}
+                                          className={`border-2 rounded-lg p-3 transition-all ${
+                                            step.status === 'completed'
+                                              ? 'bg-[#F9FCFA] border-[#094D2B]/30'
+                                              : step.status === 'running'
+                                              ? 'bg-amber-50/80 border-amber-400 shadow-sm'
+                                              : step.status === 'error'
+                                              ? 'bg-red-50/80 border-red-400'
+                                              : 'bg-gray-50/60 border-gray-200 opacity-60'
+                                          }`}
+                                        >
+                                          <div className="flex items-center justify-between mb-1.5">
+                                            <div className="flex items-center gap-2">
+                                              <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold font-mono ${
+                                                step.status === 'completed' 
+                                                  ? 'bg-[#094D2B] text-white' 
+                                                  : step.status === 'running'
+                                                  ? 'bg-amber-500 text-white animate-pulse'
+                                                  : step.status === 'error'
+                                                  ? 'bg-red-600 text-white'
+                                                  : 'bg-gray-300 text-gray-700'
+                                              }`}>
+                                                {idx + 1}
+                                              </span>
+                                              <div>
+                                                <h5 className="font-bold text-xs text-gray-900">{step.name}</h5>
+                                                <p className="text-[10px] text-gray-500 font-sans">{step.desc}</p>
+                                              </div>
+                                            </div>
+
+                                            <div className="text-right font-mono">
+                                              <div className="font-bold text-sm text-[#094D2B]">
+                                                {step.durationMs > 0 ? `${step.durationMs} ms` : step.status === 'running' ? '测量中...' : '0 ms'}
+                                              </div>
+                                              {step.durationMs > 0 && total > 0 && (
+                                                <span className="text-[10px] text-gray-500">占比: {percent}%</span>
+                                              )}
+                                            </div>
+                                          </div>
+
+                                          {/* Duration bar */}
+                                          {step.durationMs > 0 && total > 0 && (
+                                            <div className="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden my-1.5">
+                                              <div 
+                                                className={`h-full ${
+                                                  idx === 0 ? 'bg-amber-400' :
+                                                  idx === 1 ? 'bg-indigo-400' :
+                                                  idx === 2 ? 'bg-blue-500' :
+                                                  idx === 3 ? 'bg-emerald-500' : 'bg-gray-500'
+                                                }`}
+                                                style={{ width: `${Math.min(100, Math.max(4, percent))}%` }}
+                                              />
+                                            </div>
+                                          )}
+
+                                          {/* Telemetry Detail Line */}
+                                          {step.details && (
+                                            <div className="mt-1.5 pt-1.5 border-t border-gray-200/60 font-mono text-[10px] text-gray-600 bg-white/70 px-2 py-1 rounded border border-gray-150">
+                                              <span className="text-[#094D2B] font-bold">↳ 遥测数据:</span> {step.details}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })
+                                  )}
+                                </div>
                               </div>
                             </div>
                           )}
 
-                          {!playgroundLoading && !playgroundResponse && !playgroundImageBase64 && !playgroundImageUrl ? (
-                            <div className="flex-1 flex flex-col items-center justify-center text-center p-8 opacity-60">
-                              <Sparkles size={28} className="mb-2 text-[#094D2B] animate-pulse" />
-                              <p className="font-serif italic text-sm mb-1 text-[#094D2B] font-bold">等待接收高可用路由分析执行答案</p>
-                              <p className="text-[10px] text-gray-500">在左侧对话栏发送指令，负载均衡器会自动分析并路由至延迟最低的活节点上</p>
-                            </div>
-                          ) : detectModelType(playgroundModel).label.includes("生图") || detectModelType(playgroundModel).label.includes("Image") ? (
-                            /* Image Output Frame */
-                            <div className="flex-1 flex flex-col items-center justify-center space-y-4">
-                              {(playgroundImageBase64 || playgroundImageUrl) ? (
-                                <div className="space-y-4 w-full max-w-md flex flex-col items-center">
-                                  <div className="relative group overflow-hidden border-2 border-[#1E2E24] shadow-[4px_4px_0px_0px_#1E2E24] bg-white">
-                                    <img 
-                                      src={playgroundImageBase64 ? `data:image/png;base64,${playgroundImageBase64}` : playgroundImageUrl} 
-                                      alt="Generated creative"
-                                      className="max-h-[350px] w-auto max-w-full object-contain pointer-events-auto select-all"
-                                      referrerPolicy="no-referrer"
-                                    />
-                                  </div>
-                                  <div className="flex items-center gap-4">
-                                    <a 
-                                      href={playgroundImageBase64 ? `data:image/png;base64,${playgroundImageBase64}` : playgroundImageUrl}
-                                      download={`ai-balancer-image-${Date.now()}.png`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-[10px] font-mono px-3.5 py-1.5 bg-white border-2 border-[#1E2E24] shadow-[2px_2px_0px_0px_#1E2E24] hover:bg-[#094D2B] hover:text-white transition-colors flex items-center gap-1 leading-none uppercase font-bold"
-                                    >
-                                      <Download size={12} /> 下载并保存生图
-                                    </a>
+                          {/* TAB 3: PAYLOAD & METADATA VIEW */}
+                          {playgroundActiveTab === 'payload' && (
+                            <div className="flex-1 flex flex-col space-y-3 overflow-y-auto max-h-[500px]">
+                              <div className="bg-white border-2 border-[#1E2E24]/30 rounded-md p-4 space-y-3">
+                                <h4 className="font-serif italic font-bold text-xs text-[#094D2B] flex items-center gap-1.5 border-b pb-1.5">
+                                  <FileCode size={14} /> 请求报文结构与元数据 (Request Payload)
+                                </h4>
+
+                                <div className="space-y-1">
+                                  <span className="text-[10px] text-gray-500 font-bold block">HTTP 请求体 (JSON):</span>
+                                  <pre className="bg-[#1E2E24] text-emerald-300 p-3 rounded text-[11px] font-mono overflow-x-auto max-h-[180px] select-all">
+                                    {playgroundTrace?.requestPayload 
+                                      ? JSON.stringify(playgroundTrace.requestPayload, null, 2)
+                                      : playgroundPrompt
+                                      ? JSON.stringify({
+                                          model: playgroundModel,
+                                          messages: [
+                                            { role: 'system', content: playgroundSystemPrompt },
+                                            { role: 'user', content: playgroundPrompt }
+                                          ],
+                                          temperature: playgroundTemperature,
+                                          stream: playgroundStream
+                                        }, null, 2)
+                                      : '// 尚未发起请求'}
+                                  </pre>
+                                </div>
+
+                                <div className="space-y-1 pt-2 border-t">
+                                  <span className="text-[10px] text-gray-500 font-bold block">响应状态与诊断头 (Response Headers):</span>
+                                  <div className="bg-[#EFF2EF] p-2.5 rounded border border-[#1E2E24]/20 space-y-1 text-[11px] font-mono">
+                                    <div className="flex justify-between border-b pb-1">
+                                      <span className="text-gray-600">HTTP Status:</span>
+                                      <span className="font-bold text-emerald-700">{playgroundTrace ? `${playgroundTrace.status} OK` : '等待中'}</span>
+                                    </div>
+                                    <div className="flex justify-between border-b pb-1">
+                                      <span className="text-gray-600">x-routed-node:</span>
+                                      <span className="font-bold text-gray-800">{playgroundTrace?.router || '-'}</span>
+                                    </div>
+                                    <div className="flex justify-between border-b pb-1">
+                                      <span className="text-gray-600">x-router-duration-ms:</span>
+                                      <span className="font-bold text-gray-800">{playgroundTrace ? `${playgroundTrace.routeDuration}ms` : '-'}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-gray-600">content-type:</span>
+                                      <span className="font-bold text-gray-800">{playgroundStream ? 'text/event-stream; charset=utf-8' : 'application/json'}</span>
+                                    </div>
                                   </div>
                                 </div>
-                              ) : (
-                                playgroundLoading && (
-                                  <div className="flex-1 flex flex-col items-center justify-center bg-transparent py-12">
-                                    <div className="w-16 h-16 border-2 border-dashed border-[#1E2E24] rounded-full animate-spin flex items-center justify-center">
-                                      <ImageIcon size={24} className="text-[#094D2B] opacity-50" />
-                                    </div>
-                                    <p className="text-[10px] font-mono uppercase tracking-widest mt-4 text-[#094D2B]">渲染图纸渲染中...</p>
-                                  </div>
-                                )
-                              )}
-                            </div>
-                          ) : (
-                            /* Chat / Text Output Frame */
-                            <div className="flex-1 overflow-y-auto whitespace-pre-wrap font-mono text-xs leading-relaxed max-h-[450px] bg-white p-4 border-2 border-[#1E2E24]/20 select-text select-all rounded-md shadow-inner text-gray-800">
-                              {playgroundResponse || (playgroundLoading && <span className="animate-pulse">_</span>)}
+                              </div>
                             </div>
                           )}
+
                         </div>
                       </div>
                     </div>

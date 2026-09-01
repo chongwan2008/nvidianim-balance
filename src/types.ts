@@ -45,3 +45,29 @@ export interface NimConfig {
     adminPassword?: string;
   };
 }
+
+export interface PlaygroundStep {
+  id: string;
+  name: string;
+  desc: string;
+  durationMs: number;
+  status: "pending" | "running" | "completed" | "error";
+  details: string;
+}
+
+export interface PlaygroundTrace {
+  router: string;
+  model: string;
+  totalDuration: number;
+  prepDuration: number;
+  routeDuration: number;
+  ttfb: number;
+  transferDuration: number;
+  cleanupDuration: number;
+  tokens?: number;
+  tokensPerSec?: number;
+  status: number;
+  steps: PlaygroundStep[];
+  requestPayload?: any;
+  responseHeaders?: Record<string, string>;
+}
