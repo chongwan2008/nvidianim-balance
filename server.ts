@@ -1644,7 +1644,7 @@ const openAiProxyRoutes = [
 
 app.all(openAiProxyRoutes, handleOpenAiProxy);
 
-// Test a specific model on a key or across pool
+// Test a specific model on a key or across pool (Availability Check)
 app.post("/api/test-model", async (req, res) => {
   const { modelId, keyId } = req.body;
   if (!modelId) return res.status(400).json({ success: false, error: "缺少模型名称 modelId" });
@@ -1656,6 +1656,11 @@ app.post("/api/test-model", async (req, res) => {
 
   const startTime = Date.now();
   const providerLower = (targetKey.provider || "openai").toLowerCase();
+  const keyInfo = {
+    keyId: targetKey.id,
+    keyName: targetKey.name,
+    keyEndpoint: targetKey.endpoint || "系统预设"
+  };
 
   try {
     if (providerLower === "gemini") {
@@ -1673,11 +1678,11 @@ app.post("/api/test-model", async (req, res) => {
       const latency = Date.now() - startTime;
       if (!response.ok) {
         const text = await response.text();
-        return res.json({ success: false, status: response.status, latency, error: text.slice(0, 300) });
+        return res.json({ success: false, status: response.status, latency, error: text.slice(0, 300), ...keyInfo });
       }
       const data = await response.json() as any;
       const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "OK";
-      return res.json({ success: true, status: 200, latency, reply: reply.trim(), keyName: targetKey.name });
+      return res.json({ success: true, status: 200, latency, reply: reply.trim(), ...keyInfo });
     } else if (providerLower === "claude") {
       const targetUrl = `${(targetKey.endpoint || "https://api.anthropic.com").replace(/\/$/, "")}/v1/messages`;
       const response = await fetch(targetUrl, {
@@ -1697,11 +1702,11 @@ app.post("/api/test-model", async (req, res) => {
       const latency = Date.now() - startTime;
       if (!response.ok) {
         const text = await response.text();
-        return res.json({ success: false, status: response.status, latency, error: text.slice(0, 300) });
+        return res.json({ success: false, status: response.status, latency, error: text.slice(0, 300), ...keyInfo });
       }
       const data = await response.json() as any;
       const reply = data.content?.[0]?.text || "OK";
-      return res.json({ success: true, status: 200, latency, reply: reply.trim(), keyName: targetKey.name });
+      return res.json({ success: true, status: 200, latency, reply: reply.trim(), ...keyInfo });
     } else {
       const endpoint = (targetKey.endpoint || config.settings.defaultEndpoint).replace(/\/$/, "");
       const targetUrl = endpoint.endsWith("/v1") || endpoint.endsWith("/openai")
@@ -1724,16 +1729,67 @@ app.post("/api/test-model", async (req, res) => {
       const latency = Date.now() - startTime;
       if (!response.ok) {
         const text = await response.text();
-        return res.json({ success: false, status: response.status, latency, error: text.slice(0, 300) });
+        return res.json({ success: false, status: response.status, latency, error: text.slice(0, 300), ...keyInfo });
       }
       const data = await response.json() as any;
       const reply = data.choices?.[0]?.message?.content || "OK";
-      return res.json({ success: true, status: 200, latency, reply: reply.trim(), keyName: targetKey.name });
+      return res.json({ success: true, status: 200, latency, reply: reply.trim(), ...keyInfo });
     }
   } catch (err: any) {
     const latency = Date.now() - startTime;
-    return res.json({ success: false, status: 500, latency, error: err?.message || "请求超时或网络异常" });
+    return res.json({ success: false, status: 500, latency, error: err?.message || "请求超时或网络异常", ...keyInfo });
   }
+});
+
+// Remove a model from a specific key
+app.post("/api/keys/:id/remove-model", (req, res) => {
+  const { modelId } = req.body;
+  if (!modelId) return res.status(400).json({ error: "Missing modelId" });
+  const key = config.keys.find(k => k.id === req.params.id);
+  if (!key) return res.status(404).json({ error: "Key not found" });
+
+  if (key.confirmedModels) {
+    key.confirmedModels = key.confirmedModels.filter(m => m !== modelId);
+  }
+  if (key.modelFilters && key.modelFilters.length > 0) {
+    key.modelFilters = key.modelFilters.filter(m => m !== modelId);
+  }
+  if (key.modelDetails && key.modelDetails[modelId]) {
+    delete key.modelDetails[modelId];
+  }
+  saveConfig();
+  res.json({ success: true, key });
+});
+
+// Remove a model from all or specified keys
+app.post("/api/remove-model-globally", (req, res) => {
+  const { modelId, keyIds } = req.body;
+  if (!modelId) return res.status(400).json({ error: "Missing modelId" });
+  
+  const affectedKeys: string[] = [];
+  config.keys.forEach(key => {
+    if (!keyIds || keyIds.includes(key.id)) {
+      let changed = false;
+      if (key.confirmedModels && key.confirmedModels.includes(modelId)) {
+        key.confirmedModels = key.confirmedModels.filter(m => m !== modelId);
+        changed = true;
+      }
+      if (key.modelFilters && key.modelFilters.includes(modelId)) {
+        key.modelFilters = key.modelFilters.filter(m => m !== modelId);
+        changed = true;
+      }
+      if (key.modelDetails && key.modelDetails[modelId]) {
+        delete key.modelDetails[modelId];
+        changed = true;
+      }
+      if (changed) {
+        affectedKeys.push(key.name);
+      }
+    }
+  });
+
+  saveConfig();
+  res.json({ success: true, affectedKeys });
 });
 
 // Health check

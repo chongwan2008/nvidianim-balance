@@ -258,6 +258,138 @@ export const getProviderBadge = (endpoint: string, provider?: string) => {
   }
 };
 
+export interface ErrorResolutionAdvice {
+  code: number;
+  tag: string;
+  category: 'client' | 'auth' | 'rate_limit' | 'not_found' | 'server' | 'network';
+  title: string;
+  suggestion: string;
+  recommendedAction: 'retry_later' | 'remove_model' | 'check_key' | 'check_network' | 'adjust_params';
+  actionLabel: string;
+}
+
+export const getErrorResolutionAdvice = (statusCode: number, rawError?: string): ErrorResolutionAdvice => {
+  const errStr = (rawError || "").toLowerCase();
+  
+  if (statusCode === 400 || errStr.includes("bad request") || errStr.includes("invalid_request_error")) {
+    return {
+      code: 400,
+      tag: "400 请求异常 / 稍后再试",
+      category: "client",
+      title: "400 参数格式异常或服务繁忙",
+      suggestion: "上游服务报告请求格式不合法或当前请求上下文冲突，建议稍后再试 (Retry Later) 或核对参数；若反复失败可考虑移除。",
+      recommendedAction: "retry_later",
+      actionLabel: "稍后再试"
+    };
+  }
+  
+  if (statusCode === 401 || errStr.includes("unauthorized") || errStr.includes("invalid_api_key") || errStr.includes("invalid api key") || errStr.includes("authentication")) {
+    return {
+      code: 401,
+      tag: "401 密钥鉴权失败",
+      category: "auth",
+      title: "401 密钥认证未通过",
+      suggestion: "该端点的 API Key 无效、已失效或配置错误。请前往「端点管理」更新 Key，或从端点中移除该模型。",
+      recommendedAction: "check_key",
+      actionLabel: "检查并更新 Key"
+    };
+  }
+
+  if (statusCode === 403 || errStr.includes("forbidden") || errStr.includes("permission_denied") || errStr.includes("country") || errStr.includes("not allowed")) {
+    return {
+      code: 403,
+      tag: "403 权限受限 / 区域禁止",
+      category: "auth",
+      title: "403 权限不足或地区受限",
+      suggestion: "该 API Key 无权访问此模型，或该端点受到服务商地域限制。建议从可路由端点中移除该模型以避免分流报错。",
+      recommendedAction: "remove_model",
+      actionLabel: "建议从端点移除"
+    };
+  }
+
+  if (statusCode === 404 || errStr.includes("not found") || errStr.includes("model_not_found") || errStr.includes("does not exist") || errStr.includes("not_found")) {
+    return {
+      code: 404,
+      tag: "404 模型未部署/已下架",
+      category: "not_found",
+      title: "404 模型不存在或已被下架",
+      suggestion: "目标端点未部署或已下架此模型（或模型名存在细微差异）。强烈建议从端点中移除该模型，防止路由请求持续报错。",
+      recommendedAction: "remove_model",
+      actionLabel: "建议立即移除"
+    };
+  }
+
+  if (statusCode === 408 || errStr.includes("timeout") || errStr.includes("timed out") || errStr.includes("deadline exceeded")) {
+    return {
+      code: 408,
+      tag: "408 上游响应超时",
+      category: "network",
+      title: "408 响应超时 / 队列阻塞",
+      suggestion: "上游网关连接超时或模型推理排队耗时过长，属于网络波动或暂时拥堵，建议稍后再试或切换其它低延迟节点。",
+      recommendedAction: "retry_later",
+      actionLabel: "稍后再试"
+    };
+  }
+
+  if (statusCode === 413 || errStr.includes("too large") || errStr.includes("context_length_exceeded") || errStr.includes("maximum context length")) {
+    return {
+      code: 413,
+      tag: "413 上下文超限",
+      category: "client",
+      title: "413 Prompt 长度超出模型上下文",
+      suggestion: "发送内容超过了该模型允许的最大 Token 上限，请减小 Prompt 长度后稍后再试。",
+      recommendedAction: "adjust_params",
+      actionLabel: "精简后重试"
+    };
+  }
+
+  if (statusCode === 429 || errStr.includes("rate limit") || errStr.includes("quota") || errStr.includes("too many requests") || errStr.includes("insufficient_quota")) {
+    return {
+      code: 429,
+      tag: "429 触发限流 / 配额不足",
+      category: "rate_limit",
+      title: "429 触发速率限制或额度耗尽",
+      suggestion: "触发上游 RPM/TPM 频率限制或账号配额已耗尽。建议稍后再试，或增配备用 Key 分担并发流量。",
+      recommendedAction: "retry_later",
+      actionLabel: "稍后再试"
+    };
+  }
+
+  if (statusCode === 500 || errStr.includes("internal server error")) {
+    return {
+      code: 500,
+      tag: "500 服务端内部故障",
+      category: "server",
+      title: "500 上游内部错误",
+      suggestion: "上游模型推理集群发生内部瞬态故障，属于服务端暂时性异常，建议稍后再试 (Retry Later)。",
+      recommendedAction: "retry_later",
+      actionLabel: "稍后再试"
+    };
+  }
+
+  if (statusCode === 502 || statusCode === 503 || statusCode === 504 || errStr.includes("bad gateway") || errStr.includes("service unavailable") || errStr.includes("gateway timeout") || errStr.includes("overloaded")) {
+    return {
+      code: statusCode || 503,
+      tag: `${statusCode || 503} 服务过载 / 网关超时`,
+      category: "server",
+      title: `${statusCode || 503} 服务暂时不可用`,
+      suggestion: "上游模型服务当前负载过高、正在维护或网关连接断开，属于暂时性拥塞，建议稍后再试。",
+      recommendedAction: "retry_later",
+      actionLabel: "稍后再试"
+    };
+  }
+
+  return {
+    code: statusCode || 500,
+    tag: `${statusCode ? `HTTP ${statusCode}` : '网络连接异常'}`,
+    category: "network",
+    title: `${statusCode ? `HTTP ${statusCode}` : '网络连接异常'}`,
+    suggestion: "无法与上游模型端点建立正常通信，请检查该节点的 Endpoint 地址连通性，或稍后再试。",
+    recommendedAction: "retry_later",
+    actionLabel: "稍后再试"
+  };
+};
+
 export default function App() {
   const [config, setConfig] = useState<NimConfig>({ 
     keys: [], 
@@ -405,36 +537,221 @@ export default function App() {
     }
   }, [viewMode, allModels, playgroundModel]);
 
+  // Model availability check state
   const [testingModel, setTestingModel] = useState<string | null>(null);
-  const [modelTestResults, setModelTestResults] = useState<Record<string, { success: boolean; latency: number; status: number; reply?: string; error?: string; keyName?: string }>>({});
-  const [refreshingAllModels, setRefreshingAllModels] = useState<boolean>(false);
+  const [testingKeyModel, setTestingKeyModel] = useState<string | null>(null);
+  const [modelAvailabilityResults, setModelAvailabilityResults] = useState<Record<string, { 
+    success: boolean; 
+    latency: number; 
+    status: number; 
+    reply?: string; 
+    error?: string; 
+    keyName?: string;
+    keyId?: string;
+    keyEndpoint?: string;
+    testedAt: string;
+  }>>({});
+  const [keyModelAvailability, setKeyModelAvailability] = useState<Record<string, {
+    success: boolean;
+    latency: number;
+    status: number;
+    error?: string;
+    testedAt: string;
+  }>>({});
+  const [batchCheckingModels, setBatchCheckingModels] = useState<boolean>(false);
+  const [batchCheckProgress, setBatchCheckProgress] = useState<{ current: number; total: number } | null>(null);
 
-  const runTestForModel = async (modelId: string, keyId?: string) => {
-    setTestingModel(modelId);
+  // Model removal prompt modal/banner state
+  const [modelRemovalPrompt, setModelRemovalPrompt] = useState<{
+    modelId: string;
+    keyId?: string;
+    keyName?: string;
+    keyEndpoint?: string;
+    error: string;
+    status: number;
+  } | null>(null);
+
+  // Toast notification state
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const showToast = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToastMessage({ text, type });
+    setTimeout(() => {
+      setToastMessage(prev => prev?.text === text ? null : prev);
+    }, 4000);
+  };
+
+  // Run availability check for a specific model (and optionally specific key)
+  const checkModelAvailability = async (modelId: string, specificKeyId?: string) => {
+    if (specificKeyId) {
+      setTestingKeyModel(`${modelId}:${specificKeyId}`);
+    } else {
+      setTestingModel(modelId);
+    }
+
     try {
       const res = await fetch("/api/test-model", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modelId, keyId })
+        body: JSON.stringify({ modelId, keyId: specificKeyId })
       });
       const result = await res.json();
-      setModelTestResults(prev => ({ ...prev, [modelId]: result }));
+      const testedAt = new Date().toLocaleTimeString();
+
+      const fullResult = {
+        ...result,
+        testedAt
+      };
+
+      if (specificKeyId) {
+        setKeyModelAvailability(prev => ({
+          ...prev,
+          [`${modelId}:${specificKeyId}`]: {
+            success: result.success,
+            latency: result.latency || 0,
+            status: result.status || (result.success ? 200 : 500),
+            error: result.error,
+            testedAt
+          }
+        }));
+      }
+
+      setModelAvailabilityResults(prev => ({
+        ...prev,
+        [modelId]: fullResult
+      }));
+
+      if (!result.success) {
+        // Automatically prompt user to remove from the failed route endpoint
+        setModelRemovalPrompt({
+          modelId,
+          keyId: result.keyId || specificKeyId,
+          keyName: result.keyName || "目标端点",
+          keyEndpoint: result.keyEndpoint,
+          error: result.error || "模型无法响应 (HTTP 异常)",
+          status: result.status || 500
+        });
+      } else {
+        showToast(`模型「${modelId}」可用性检测通过 (200 OK, ${result.latency}ms)`, 'success');
+      }
+      return fullResult;
     } catch (err: any) {
-      setModelTestResults(prev => ({ ...prev, [modelId]: { success: false, latency: 0, status: 500, error: err?.message || "测试失败" } }));
+      const errResult = {
+        success: false,
+        latency: 0,
+        status: 500,
+        error: err?.message || "网络请求异常或超时",
+        testedAt: new Date().toLocaleTimeString()
+      };
+      setModelAvailabilityResults(prev => ({ ...prev, [modelId]: errResult }));
+      setModelRemovalPrompt({
+        modelId,
+        keyId: specificKeyId,
+        keyName: "当前端点",
+        error: errResult.error,
+        status: 500
+      });
+      return errResult;
     } finally {
-      setTestingModel(null);
+      if (specificKeyId) {
+        setTestingKeyModel(null);
+      } else {
+        setTestingModel(null);
+      }
     }
   };
 
-  const handleRefreshAllModels = async () => {
-    setRefreshingAllModels(true);
+  // Batch availability check for all models
+  const handleBatchCheckAllModels = async () => {
+    if (batchCheckingModels) return;
+    setBatchCheckingModels(true);
+    const modelsToCheck = allModels;
+    setBatchCheckProgress({ current: 0, total: modelsToCheck.length });
+
+    let failCount = 0;
+    let successCount = 0;
+
+    for (let i = 0; i < modelsToCheck.length; i++) {
+      const m = modelsToCheck[i];
+      setBatchCheckProgress({ current: i + 1, total: modelsToCheck.length });
+      try {
+        const res = await fetch("/api/test-model", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ modelId: m })
+        });
+        const data = await res.json();
+        const fullResult = {
+          ...data,
+          testedAt: new Date().toLocaleTimeString()
+        };
+        setModelAvailabilityResults(prev => ({ ...prev, [m]: fullResult }));
+        if (data.success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch (err: any) {
+        failCount++;
+        setModelAvailabilityResults(prev => ({
+          ...prev,
+          [m]: {
+            success: false,
+            latency: 0,
+            status: 500,
+            error: err?.message || "网络故障",
+            testedAt: new Date().toLocaleTimeString()
+          }
+        }));
+      }
+    }
+
+    setBatchCheckingModels(false);
+    setBatchCheckProgress(null);
+    showToast(`全量可用性检测完成: ${successCount} 个可用, ${failCount} 个异常`, failCount > 0 ? 'info' : 'success');
+  };
+
+  // Remove model from a key or all keys
+  const handleRemoveModel = async (modelId: string, keyId?: string) => {
     try {
-      await fetch("/api/health-check/run", { method: "POST" });
+      if (keyId) {
+        const res = await fetch(`/api/keys/${keyId}/remove-model`, {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-admin-password": localStorage.getItem("nim_admin_password") || ""
+          },
+          body: JSON.stringify({ modelId })
+        });
+        const data = await res.json();
+        if (data.success) {
+          const keyName = config.keys.find(k => k.id === keyId)?.name || "指定端点";
+          showToast(`已成功将模型「${modelId}」从端点「${keyName}」中移除`, 'success');
+        }
+      } else {
+        const res = await fetch("/api/remove-model-globally", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-admin-password": localStorage.getItem("nim_admin_password") || ""
+          },
+          body: JSON.stringify({ modelId })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`已成功将模型「${modelId}」从所有关联端点中移除`, 'success');
+        }
+      }
+      
+      // Close prompt if open
+      if (modelRemovalPrompt?.modelId === modelId) {
+        setModelRemovalPrompt(null);
+      }
+      // Refresh config
       await fetchConfig();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setRefreshingAllModels(false);
+    } catch (err: any) {
+      console.error("Remove model error:", err);
+      showToast(`移除模型失败: ${err?.message || "未知错误"}`, 'error');
     }
   };
 
@@ -872,9 +1189,21 @@ export default function App() {
       }
     } catch (err: any) {
       console.error(err);
-      setPlaygroundResponse(`请求出错: ${err.message || "未知错误"}`);
+      const rawErrMsg = err?.message || "未知错误";
+      // Parse status code from error if present (e.g. "[400]" or "400")
+      const statusMatch = rawErrMsg.match(/\b(400|401|403|404|429|500|502|503|504)\b/);
+      const detectedStatus = statusMatch ? parseInt(statusMatch[1], 10) : 500;
+      const advice = getErrorResolutionAdvice(detectedStatus, rawErrMsg);
+      
+      setPlaygroundResponse(
+        `❌ 请求执行出错: ${rawErrMsg}\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `💡 智能诊断与处理建议 (${advice.tag}):\n` +
+        `▸ ${advice.suggestion}\n` +
+        `▸ 推荐操作: ${advice.actionLabel}`
+      );
       // Mark active step as error
-      setPlaygroundCurrentSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'error', details: err.message } : s));
+      setPlaygroundCurrentSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'error', details: `${err.message} (${advice.actionLabel})` } : s));
     } finally {
       setPlaygroundLoading(false);
     }
@@ -2064,10 +2393,32 @@ export default function App() {
                 </motion.div>
               ) : viewMode === 'models' ? (
                 <motion.div key="models" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
-                  {/* Model Search and Filter Header */}
+                  {/* Model Search, Filter & Batch Availability Header */}
                   <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div className="space-y-1">
-                      <h3 className="font-sans text-sm font-extrabold text-slate-800">端点聚合模型中心 (Aggregated Model Hub)</h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-sans text-sm font-extrabold text-slate-800">端点聚合模型中心 (Aggregated Model Hub)</h3>
+                        {(() => {
+                          const results = Object.values(modelAvailabilityResults) as { success: boolean }[];
+                          const successCount = results.filter(r => r.success).length;
+                          const failCount = results.filter(r => !r.success).length;
+                          if (results.length === 0) return null;
+                          return (
+                            <div className="flex items-center gap-1.5 ml-2 font-mono text-[10px]">
+                              {successCount > 0 && (
+                                <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-bold">
+                                  ✓ {successCount} 个可用
+                                </span>
+                              )}
+                              {failCount > 0 && (
+                                <span className="bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded font-bold">
+                                  ✗ {failCount} 个异常
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
                       <p className="text-[10px] text-gray-500 font-mono">
                         智能汇总当前所有路由节点所授权通过的活跃大模型源（共 {
                           Array.from(new Set(config.keys.flatMap(key => {
@@ -2081,12 +2432,23 @@ export default function App() {
                     </div>
                     <div className="flex items-center gap-3 w-full sm:w-auto">
                       <button
-                        onClick={handleRefreshAllModels}
-                        disabled={refreshingAllModels}
-                        className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold font-sans flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                        onClick={handleBatchCheckAllModels}
+                        disabled={batchCheckingModels}
+                        className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-sans flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer shrink-0 disabled:opacity-60"
                       >
-                        <RefreshCw size={13} className={refreshingAllModels ? "animate-spin" : ""} />
-                        <span>{refreshingAllModels ? "探测同步中..." : "探测全部节点"}</span>
+                        {batchCheckingModels ? (
+                          <>
+                            <RefreshCw size={13} className="animate-spin" />
+                            <span>
+                              可用性检测中 {batchCheckProgress ? `(${batchCheckProgress.current}/${batchCheckProgress.total})` : '...'}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <ShieldCheck size={14} />
+                            <span>全量可用性检测</span>
+                          </>
+                        )}
                       </button>
                       <div className="w-full sm:w-72 relative font-sans">
                         <input
@@ -2125,7 +2487,8 @@ export default function App() {
                       const ctxLen = sampleKey?.modelDetails?.[modelId]?.contextLength;
                       const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : null;
                       const modelType = detectModelType(modelId);
-                      const testResult = modelTestResults[modelId];
+                      const testResult = modelAvailabilityResults[modelId];
+                      const isTestingThisModel = testingModel === modelId;
 
                       return (
                         <div key={modelId} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden font-sans animate-fade-in">
@@ -2142,22 +2505,37 @@ export default function App() {
                             </div>
 
                             <div className="flex items-center gap-2 font-sans normal-case">
-                              {testResult && (
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                              {testResult ? (
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border flex items-center gap-1 ${
                                   testResult.success
                                     ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                                     : "bg-rose-50 text-rose-700 border-rose-200"
                                 }`}>
-                                  {testResult.success ? `✓ ${testResult.latency}ms (${testResult.keyName || "OK"})` : `✗ ${testResult.status || "FAIL"}`}
+                                  {testResult.success ? (
+                                    <>
+                                      <CheckCircle2 size={11} />
+                                      <span>可用 · {testResult.latency}ms ({testResult.keyName || "200 OK"})</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <AlertCircle size={11} />
+                                      <span>不可用 (HTTP {testResult.status || 500})</span>
+                                    </>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-mono border bg-slate-100 text-slate-500 border-slate-200">
+                                  待检测可用性
                                 </span>
                               )}
+
                               <button
-                                onClick={() => runTestForModel(modelId)}
-                                disabled={testingModel === modelId}
-                                className="px-2.5 py-1 bg-slate-200/80 hover:bg-slate-300 text-slate-700 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                                onClick={() => checkModelAvailability(modelId)}
+                                disabled={isTestingThisModel || batchCheckingModels}
+                                className="px-2.5 py-1 bg-slate-200/80 hover:bg-slate-300 text-slate-700 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
                               >
-                                {testingModel === modelId ? <RefreshCw size={10} className="animate-spin" /> : <Play size={10} />}
-                                <span>{testingModel === modelId ? "连通性测试中..." : "测试连通性"}</span>
+                                {isTestingThisModel ? <RefreshCw size={10} className="animate-spin" /> : <ShieldCheck size={11} />}
+                                <span>{isTestingThisModel ? "可用性检测中..." : "可用性检测"}</span>
                               </button>
                               <button
                                 onClick={() => {
@@ -2171,32 +2549,139 @@ export default function App() {
                             </div>
                           </div>
                           
-                          {testResult && !testResult.success && testResult.error && (
-                            <div className="bg-rose-50 border-b border-rose-200 p-2.5 px-4 text-xs font-mono text-rose-700 flex items-center justify-between">
-                              <span className="truncate">⚠️ 测试报错: {testResult.error}</span>
-                            </div>
-                          )}
+                          {/* Availability Error & Model Removal Prompt with Code-Specific Advice */}
+                          {testResult && !testResult.success && (() => {
+                            const advice = getErrorResolutionAdvice(testResult.status, testResult.error);
+                            return (
+                              <div className="bg-rose-50/90 border-b border-rose-200 p-4 text-xs font-sans text-rose-800 flex flex-col gap-3 animate-fade-in">
+                                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                                  <div className="flex items-start gap-2.5 min-w-0">
+                                    <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                                    <div className="min-w-0 space-y-1">
+                                      <div className="font-bold flex items-center gap-2 flex-wrap text-rose-900">
+                                        <span>可用性检测报错</span>
+                                        <span className="text-[10px] font-mono bg-rose-200/90 px-2 py-0.5 rounded text-rose-900 font-bold border border-rose-300">
+                                          HTTP {testResult.status || 500}
+                                        </span>
+                                        {testResult.keyName && (
+                                          <span className="text-[10px] bg-white border border-rose-200 px-2 py-0.5 rounded text-rose-700 font-bold font-mono">
+                                            失败节点: {testResult.keyName}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-[11px] text-rose-700 font-mono truncate max-w-[680px]">
+                                        {testResult.error || "未能成功响应测试请求"}
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 shrink-0 self-end lg:self-auto flex-wrap">
+                                    <button
+                                      onClick={() => checkModelAvailability(modelId, testResult.keyId)}
+                                      className="px-2.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                                      title="重新发起此模型/节点的可用性检测"
+                                    >
+                                      <RefreshCw size={12} className={isTestingThisModel ? "animate-spin" : ""} />
+                                      <span>重新检测</span>
+                                    </button>
+                                    {testResult.keyId && (
+                                      <button
+                                        onClick={() => handleRemoveModel(modelId, testResult.keyId)}
+                                        className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[11px] font-bold flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                                        title={`从端点「${testResult.keyName || '该端点'}」中移除`}
+                                      >
+                                        <Trash2 size={12} />
+                                        <span>从「{testResult.keyName || '该端点'}」移除</span>
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={() => handleRemoveModel(modelId)}
+                                      className="px-2.5 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-800 border border-rose-300 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                                    >
+                                      <Trash2 size={12} />
+                                      <span>从全部端点移除</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Intelligent Action Advice Box */}
+                                <div className="bg-white/85 border border-rose-200/80 rounded-xl p-2.5 px-3 flex items-start sm:items-center gap-2.5 shadow-2xs text-[11px]">
+                                  <div className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center shrink-0 font-bold text-xs mt-0.5 sm:mt-0">
+                                    💡
+                                  </div>
+                                  <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-extrabold text-slate-800 shrink-0">处理建议 ({advice.tag}):</span>
+                                      <span className="text-slate-700">{advice.suggestion}</span>
+                                    </div>
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 self-start sm:self-auto border ${
+                                      advice.recommendedAction === 'retry_later' 
+                                        ? 'bg-amber-50 text-amber-800 border-amber-200' 
+                                        : advice.recommendedAction === 'remove_model' 
+                                        ? 'bg-rose-50 text-rose-800 border-rose-200' 
+                                        : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                    }`}>
+                                      {advice.actionLabel}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
                           
                           <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-150 font-sans">
                             {/* Left Column: Endpoints list */}
                             <div className="lg:col-span-7 divide-y divide-slate-100">
                               {keysForModel.map(key => {
                                 const perf = getLatencyForProviderModel(key, modelId, globalLogs);
+                                const endpointKey = `${modelId}:${key.id}`;
+                                const keyResult = keyModelAvailability[endpointKey];
+                                const isTestingThisKey = testingKeyModel === endpointKey;
+
                                 return (
-                                  <div key={key.id} className="p-4 px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs transition-colors hover:bg-slate-50/70">
+                                  <div key={key.id} className="p-4 px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition-colors hover:bg-slate-50/70">
                                     <div className="flex items-center gap-3 font-semibold min-w-0">
                                       <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${key.status === 'active' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
                                       <div className="min-w-0">
                                         <div className="flex items-center gap-2 flex-wrap">
                                           <span className="font-sans text-sm font-bold text-slate-800 truncate">{key.name}</span>
-                                          <span className="text-[9px] bg-slate-105 border border-slate-200 px-1.5 py-0.2 rounded font-mono text-slate-500">
-                                            {perf.latency}ms {perf.type === 'real' || perf.type === 'real_key' ? '🎯 实战' : '⚡ 估算'}
+                                          <span className="text-[9px] bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded font-mono text-slate-500">
+                                            {perf.latency}ms 基准
                                           </span>
+                                          {keyResult && (
+                                            <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold border ${
+                                              keyResult.success 
+                                                ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+                                                : "bg-rose-50 text-rose-700 border-rose-200"
+                                            }`}>
+                                              {keyResult.success ? `✓ 可用 (${keyResult.latency}ms)` : `✗ HTTP ${keyResult.status}`}
+                                            </span>
+                                          )}
                                         </div>
-                                        <span className="opacity-55 font-mono text-[9px] block truncate max-w-[240px] text-slate-500 mt-0.5">{key.endpoint || '系统置顶节点'}</span>
+                                        <span className="opacity-55 font-mono text-[9px] block truncate max-w-[260px] text-slate-500 mt-0.5">{key.endpoint || '系统置顶节点'}</span>
                                       </div>
                                     </div>
-                                    <div className="flex items-center gap-6 font-mono text-[10px] justify-between sm:justify-end">
+
+                                    <div className="flex items-center gap-3 font-mono text-[10px] justify-between sm:justify-end">
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          onClick={() => checkModelAvailability(modelId, key.id)}
+                                          disabled={isTestingThisKey}
+                                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[9px] font-bold flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
+                                          title="单独检测此端点可用性"
+                                        >
+                                          {isTestingThisKey ? <RefreshCw size={9} className="animate-spin" /> : <Play size={9} />}
+                                          <span>检测此端点</span>
+                                        </button>
+                                        <button
+                                          onClick={() => handleRemoveModel(modelId, key.id)}
+                                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                                          title={`从端点「${key.name}」中移除该模型`}
+                                        >
+                                          <Trash2 size={13} />
+                                        </button>
+                                      </div>
+
                                       {key.quotaLimit ? (
                                         <div className="text-right">
                                           <span className="opacity-55 mr-1 font-bold">剩余配额:</span>
@@ -2204,7 +2689,7 @@ export default function App() {
                                         </div>
                                       ) : <span className="opacity-55 uppercase tracking-wider text-[9px] font-bold text-emerald-600 font-sans">不限配额</span>}
                                       
-                                      <div className="text-right min-w-[60px] font-bold text-slate-700">
+                                      <div className="text-right min-w-[50px] font-bold text-slate-700">
                                         <span className="opacity-55 mr-1">RPM:</span>
                                         <span className="font-bold">{key.rpmLimit || '∞'}</span>
                                       </div>
@@ -2220,23 +2705,11 @@ export default function App() {
                                 <div className="flex items-center justify-between mb-2">
                                   <h4 className="font-sans text-xs font-extrabold text-[#094D2B] flex items-center gap-1.5">
                                     <Activity size={12} className="text-emerald-600" />
-                                    <span>端点及协议往返时延对比 (Proxy Latency)</span>
+                                    <span>端点通道与基准延时 (Routing Latency)</span>
                                   </h4>
-                                  {(() => {
-                                    const chartData = keysForModel.map(key => {
-                                      const perf = getLatencyForProviderModel(key, modelId, globalLogs);
-                                      return { name: key.name, latency: perf.latency, type: perf.type };
-                                    });
-                                    const hasReal = chartData.some(d => d.type === 'real' || d.type === 'real_key');
-                                    return (
-                                      <span className={`px-1.5 py-0.5 text-[8px] font-mono font-bold rounded uppercase tracking-wider ${hasReal ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                                        {hasReal ? '🎯 实时测量' : '⏱️ 预设基准'}
-                                      </span>
-                                    );
-                                  })()}
                                 </div>
                                 <p className="text-[10px] text-slate-500 font-sans mb-4 leading-relaxed">
-                                  该模型的各分流通道往返时延（包含协议转换中置开销）。延迟越低代表 Agent 发起回复与首字下发的总体感官体验越优越。
+                                  该模型在各分流通道上的响应基准。优先路由至延时更低且可用性检测通过的健康节点。
                                 </p>
                               </div>
 
@@ -2288,7 +2761,7 @@ export default function App() {
                                                   <div className="flex items-center gap-2 mt-0.5 py-0.5 px-1 bg-slate-50 rounded">
                                                     <span className="font-bold text-[#094D2B] font-mono">{data.latency} ms</span>
                                                     <span className="text-[7px] bg-slate-200 text-slate-700 px-1 rounded uppercase font-bold tracking-wider">
-                                                      {data.type === 'real' ? '🎯 实时实测' : data.type === 'real_key' ? '⚡ 节点平均' : '⏳ 协议基准'}
+                                                      基准延时
                                                     </span>
                                                   </div>
                                                 </div>
@@ -3316,6 +3789,167 @@ export default function App() {
                 </button>
               </form>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Model Removal Confirmation Modal */}
+      <AnimatePresence>
+        {modelRemovalPrompt && (() => {
+          const advice = getErrorResolutionAdvice(modelRemovalPrompt.status, modelRemovalPrompt.error);
+          return (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-white border-2 border-slate-200 rounded-2xl shadow-2xl max-w-lg w-full p-6 font-sans space-y-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                      advice.recommendedAction === 'remove_model' ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      <AlertCircle size={22} />
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-slate-800 text-sm">可用性检测诊断 · 处理建议</h3>
+                      <p className="text-xs text-slate-500 font-mono">模型: {modelRemovalPrompt.modelId}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setModelRemovalPrompt(null)}
+                    className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {/* Status & Raw Error Box */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between text-slate-800 font-bold">
+                    <span className="flex items-center gap-2">
+                      <span>异常状态码:</span>
+                      <span className="font-mono bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded border border-rose-200">
+                        HTTP {modelRemovalPrompt.status}
+                      </span>
+                    </span>
+                    {modelRemovalPrompt.keyName && (
+                      <span className="bg-white border border-slate-200 px-2 py-0.5 rounded text-[10px] text-slate-600 font-mono">
+                        目标端点: {modelRemovalPrompt.keyName}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-rose-700 font-mono text-[11px] break-all leading-relaxed">
+                    {modelRemovalPrompt.error}
+                  </p>
+                </div>
+
+                {/* Smart Code Diagnosis & Advice Card */}
+                <div className={`border rounded-xl p-3.5 space-y-2 text-xs ${
+                  advice.recommendedAction === 'retry_later' 
+                    ? 'bg-amber-50/70 border-amber-200 text-amber-900' 
+                    : advice.recommendedAction === 'remove_model' 
+                    ? 'bg-rose-50/70 border-rose-200 text-rose-900' 
+                    : 'bg-sky-50/70 border-sky-200 text-sky-900'
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold flex items-center gap-1.5 text-[12px]">
+                      <span>💡</span>
+                      <span>诊断提示: {advice.title}</span>
+                    </span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                      advice.recommendedAction === 'retry_later'
+                        ? 'bg-amber-100 text-amber-800 border-amber-300'
+                        : advice.recommendedAction === 'remove_model'
+                        ? 'bg-rose-100 text-rose-800 border-rose-300'
+                        : 'bg-sky-100 text-sky-800 border-sky-300'
+                    }`}>
+                      推荐: {advice.actionLabel}
+                    </span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed opacity-95">
+                    {advice.suggestion}
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const mid = modelRemovalPrompt.modelId;
+                        const kid = modelRemovalPrompt.keyId;
+                        setModelRemovalPrompt(null);
+                        checkModelAvailability(mid, kid);
+                      }}
+                      className="px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <RefreshCw size={12} />
+                      <span>立即重试检测</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setModelRemovalPrompt(null)}
+                      className="px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                    >
+                      稍后再试 (保留)
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {modelRemovalPrompt.keyId && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveModel(modelRemovalPrompt.modelId, modelRemovalPrompt.keyId)}
+                        className={`px-3 py-2 text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer ${
+                          advice.recommendedAction === 'remove_model' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-rose-500 hover:bg-rose-600 opacity-90'
+                        }`}
+                      >
+                        <Trash2 size={13} />
+                        <span>从「{modelRemovalPrompt.keyName || '该端点'}」移除</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveModel(modelRemovalPrompt.modelId)}
+                      className="px-3 py-2 bg-rose-100 hover:bg-rose-200 text-rose-800 border border-rose-300 text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 size={13} />
+                      <span>全部移除</span>
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          );
+        })()}
+      </AnimatePresence>
+
+      {/* Floating Toast Notification */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 bg-slate-900 text-white rounded-xl shadow-lg border border-slate-700 text-xs font-sans max-w-md"
+          >
+            {toastMessage.type === 'success' && <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />}
+            {toastMessage.type === 'error' && <AlertCircle size={16} className="text-rose-400 shrink-0" />}
+            {toastMessage.type === 'info' && <RefreshCw size={16} className="text-sky-400 shrink-0" />}
+            <span className="flex-1 leading-snug">{toastMessage.text}</span>
+            <button
+              onClick={() => setToastMessage(null)}
+              className="text-slate-400 hover:text-white p-0.5 rounded transition-colors"
+            >
+              <X size={14} />
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
