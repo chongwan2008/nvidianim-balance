@@ -1284,19 +1284,8 @@ app.get("/models/:modelId", handleSingleModelQuery);
 const handleOpenAiProxy = async (req: express.Request, res: express.Response) => {
   const startTime = Date.now();
 
-  // Detect CLI OAuth and intercept token configurations styled like cloud-native developer environments
   const authHeader = req.headers.authorization || "";
   const apiKeyHeader = req.headers["api-key"] as string | undefined;
-  const token = authHeader.replace(/^Bearer\s+/i, "");
-  let oauthProfile = "";
-
-  if (token.startsWith("ghu_") || token.startsWith("gho_") || token.startsWith("gh_copilot_")) {
-    oauthProfile = "GitHub Copilot CLI";
-  } else if (token.startsWith("ya29.")) {
-    oauthProfile = "Google Cloud Gemini (ADC)";
-  } else if (token.startsWith("vertex_cl_") || token.startsWith("session_ant_")) {
-    oauthProfile = "Claude OAuth (JWT)";
-  }
 
   // Auth check for the balancer itself
   let isAuthorized = false;
@@ -1304,10 +1293,6 @@ const handleOpenAiProxy = async (req: express.Request, res: express.Response) =>
     isAuthorized = true;
   } else if (authHeader === `Bearer ${config.settings.masterKey}` || apiKeyHeader === config.settings.masterKey) {
     isAuthorized = true;
-  } else if (oauthProfile) {
-    // Automatically authorize recognized CLI OAuth token contexts
-    isAuthorized = true;
-    console.log(`[OAuth Detector] Intercepted CLI OAuth token for profile: ${oauthProfile}`);
   }
 
   if (!isAuthorized) {
