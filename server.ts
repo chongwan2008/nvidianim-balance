@@ -1909,6 +1909,11 @@ app.post("/api/keys/check-status", async (req, res) => {
   }
 });
 
+// Fallback for unhandled /api routes to prevent HTML response
+app.all("/api/*", (req, res) => {
+  res.status(404).json({ error: `API route not found: ${req.method} ${req.path}` });
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

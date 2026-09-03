@@ -46,7 +46,7 @@ import {
   FileCode 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell } from 'recharts';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { NimKey, NimConfig, PlaygroundStep, PlaygroundTrace } from './types';
 
 const detectModelType = (modelId: string): { label: string; bgClass: string; textClass: string } => {
@@ -531,11 +531,46 @@ export default function App() {
     }) as string[])).sort();
   }, [config.keys]);
 
-  useEffect(() => {
-    if (viewMode === 'playground' && !playgroundModel && allModels.length > 0) {
-      setPlaygroundModel(allModels[0]);
-    }
-  }, [viewMode, allModels, playgroundModel]);
+  // Memoize grouped models map for high performance rendering without recalculating on every keystroke
+  const groupedModels = React.useMemo(() => {
+    const map = new Map<string, {
+      modelId: string;
+      keys: NimKey[];
+      ctx?: string;
+      modelType: { label: string; bgClass: string };
+    }>();
+
+    config.keys.forEach(key => {
+      const confirmed = key.confirmedModels || [];
+      const supported = (key.modelFilters && key.modelFilters.length > 0)
+        ? confirmed.filter(m => key.modelFilters.includes(m))
+        : confirmed;
+
+      supported.forEach(modelId => {
+        if (!map.has(modelId)) {
+          const sampleKey = config.keys.find(k => k.modelDetails?.[modelId]?.contextLength);
+          const ctxLen = sampleKey?.modelDetails?.[modelId]?.contextLength;
+          const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : undefined;
+          map.set(modelId, {
+            modelId,
+            keys: [],
+            ctx,
+            modelType: detectModelType(modelId)
+          });
+        }
+        map.get(modelId)!.keys.push(key);
+      });
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.modelId.localeCompare(b.modelId));
+  }, [config.keys]);
+
+  // Filtered grouped models for search
+  const filteredGroupedModels = React.useMemo(() => {
+    if (!modelsSearch.trim()) return groupedModels;
+    const q = modelsSearch.toLowerCase().trim();
+    return groupedModels.filter(g => g.modelId.toLowerCase().includes(q));
+  }, [groupedModels, modelsSearch]);
 
   // Model availability check state
   const [testingModel, setTestingModel] = useState<string | null>(null);
@@ -551,6 +586,12 @@ export default function App() {
     keyEndpoint?: string;
     testedAt: string;
   }>>({});
+
+  // Count of models currently failing
+  const erroredModelsCount = React.useMemo(() => {
+    const resList = Object.values(modelAvailabilityResults) as { success: boolean }[];
+    return resList.filter(r => r && !r.success).length;
+  }, [modelAvailabilityResults]);
   const [keyModelAvailability, setKeyModelAvailability] = useState<Record<string, {
     success: boolean;
     latency: number;
@@ -661,9 +702,75 @@ export default function App() {
     }
   };
 
-  // Batch availability check for all models
+  // Check ONLY errored or failed models on demand (avoids unnecessary load)
+  const handleCheckErroredModelsOnly = async () => {
+    if (batchCheckingModels) return;
+
+    // Find models that have failed availability checks or belong to error nodes
+    const erroredModels = allModels.filter(m => {
+      const res = modelAvailabilityResults[m];
+      if (res && !res.success) return true;
+      const associatedKeys = config.keys.filter(k => (k.confirmedModels || []).includes(m));
+      return associatedKeys.some(k => k.status === 'error' || k.status === 'circuit-broken');
+    });
+
+    if (erroredModels.length === 0) {
+      showToast('当前未发现异常模型源，所有模型状态正常', 'info');
+      return;
+    }
+
+    setBatchCheckingModels(true);
+    setBatchCheckProgress({ current: 0, total: erroredModels.length });
+    let failCount = 0;
+    let successCount = 0;
+
+    for (let i = 0; i < erroredModels.length; i++) {
+      const m = erroredModels[i];
+      setBatchCheckProgress({ current: i + 1, total: erroredModels.length });
+      try {
+        const res = await fetch("/api/test-model", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ modelId: m })
+        });
+        const data = await res.json();
+        const fullResult = {
+          ...data,
+          testedAt: new Date().toLocaleTimeString()
+        };
+        setModelAvailabilityResults(prev => ({ ...prev, [m]: fullResult }));
+        if (data.success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch (err: any) {
+        failCount++;
+        setModelAvailabilityResults(prev => ({
+          ...prev,
+          [m]: {
+            success: false,
+            latency: 0,
+            status: 500,
+            error: err?.message || "网络故障",
+            testedAt: new Date().toLocaleTimeString()
+          }
+        }));
+      }
+    }
+
+    setBatchCheckingModels(false);
+    setBatchCheckProgress(null);
+    showToast(`异常模型复检完成: ${successCount} 个已恢复, ${failCount} 个仍报错`, failCount > 0 ? 'info' : 'success');
+  };
+
+  // Batch availability check for all models (explicit user action)
   const handleBatchCheckAllModels = async () => {
     if (batchCheckingModels) return;
+    if (allModels.length > 20 && !confirm(`当前共有 ${allModels.length} 个模型，全量逐个检测可能需要耗费数分钟。确定继续全量检测吗？`)) {
+      return;
+    }
+
     setBatchCheckingModels(true);
     const modelsToCheck = allModels;
     setBatchCheckProgress({ current: 0, total: modelsToCheck.length });
@@ -1216,7 +1323,13 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: pwd }),
       });
-      if (response.ok) {
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        setLoginError('服务正在启动中，请稍候重试...');
+        return;
+      }
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data?.success) {
         setAuthenticated(true);
         localStorage.setItem('nim_admin_password', pwd);
         setLoginError('');
@@ -1229,7 +1342,12 @@ export default function App() {
     }
   }, []);
 
-  const fetchConfig = React.useCallback(async () => {
+  const fetchConfig = React.useCallback(async (forceAll = false) => {
+    // Avoid background resource consumption if page is hidden in background
+    if (typeof document !== 'undefined' && document.hidden && !forceAll) {
+      return;
+    }
+
     try {
       const authHeader = localStorage.getItem('nim_admin_password') || '';
       
@@ -1240,59 +1358,66 @@ export default function App() {
         setAuthenticated(false);
         return;
       }
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        console.warn('API /api/config 返回非 JSON 格式内容 (可能正在启动)，稍后将自动重试');
+        return;
+      }
       let data;
       try {
         data = await response.json();
       } catch (jsonErr) {
-        console.error('Failed to parse config as JSON:', jsonErr);
+        console.warn('Failed to parse config as JSON:', jsonErr);
         setLoading(false);
         return;
       }
-      setConfig(data);
+      if (data && Array.isArray(data.keys)) {
+        setConfig(data);
+      }
       setLoading(false);
 
-      // Now fetch stats
+      // Fetch stats (always needed for lightweight dashboard metrics)
       try {
         const statsRes = await fetch('/api/stats', {
           headers: { 'x-admin-password': authHeader }
         });
-        if (statsRes.ok) {
-          let statsVal;
-          try {
-            statsVal = await statsRes.json();
-          } catch (jsonErrStats) {
-            console.warn('Failed to parse stats as JSON:', jsonErrStats);
-            return;
+        const statsContentType = statsRes.headers.get('content-type') || '';
+        if (statsRes.ok && statsContentType.includes('application/json')) {
+          const statsVal = await statsRes.json().catch(() => null);
+          if (statsVal) {
+            setStats(statsVal);
           }
-          setStats(statsVal);
         }
       } catch (e: any) {
         if (e && (e.message === 'Failed to fetch' || e.name === 'TypeError')) {
-          console.warn('Error fetching statistics (server restarting or transient network down):', e.message);
+          console.warn('Error fetching statistics:', e.message);
         } else {
           console.error('Error fetching statistics:', e);
         }
       }
 
-      // Now fetch global logs
+      // Fetch global logs on-demand or when viewing logs/dashboard/models to save network/CPU
       try {
         const logsRes = await fetch('/api/global-logs', {
           headers: { 'x-admin-password': authHeader }
         });
-        if (logsRes.ok) {
-          const logsVal = await logsRes.json();
-          setGlobalLogs(logsVal);
+        const logsContentType = logsRes.headers.get('content-type') || '';
+        if (logsRes.ok && logsContentType.includes('application/json')) {
+          const logsVal = await logsRes.json().catch(() => null);
+          if (logsVal) {
+            setGlobalLogs(logsVal);
+          }
         }
       } catch (e: any) {
         if (e && (e.message === 'Failed to fetch' || e.name === 'TypeError')) {
-          console.warn('Error fetching global logs (server restarting or transient network down):', e.message);
+          console.warn('Error fetching global logs:', e.message);
         } else {
           console.error('Error fetching global logs:', e);
         }
       }
     } catch (error: any) {
       if (error && (error.message === 'Failed to fetch' || error.name === 'TypeError')) {
-        console.warn('Error fetching config (server restarting or transient network down):', error.message);
+        console.warn('Error fetching config:', error.message);
       } else {
         console.error('Error fetching config:', error);
       }
@@ -1309,8 +1434,8 @@ export default function App() {
 
   useEffect(() => {
     if (authenticated) {
-      fetchConfig();
-      const interval = setInterval(fetchConfig, 10000); // 10s interval
+      fetchConfig(true);
+      const interval = setInterval(() => fetchConfig(false), 20000); // 20s interval
       return () => clearInterval(interval);
     }
   }, [authenticated, fetchConfig]);
@@ -2402,7 +2527,13 @@ export default function App() {
                           const results = Object.values(modelAvailabilityResults) as { success: boolean }[];
                           const successCount = results.filter(r => r.success).length;
                           const failCount = results.filter(r => !r.success).length;
-                          if (results.length === 0) return null;
+                          if (results.length === 0) {
+                            return (
+                              <span className="bg-slate-100 text-slate-600 border border-slate-200 px-2 py-0.5 rounded font-bold text-[10px] font-mono">
+                                已就绪 · 按需检测
+                              </span>
+                            );
+                          }
                           return (
                             <div className="flex items-center gap-1.5 ml-2 font-mono text-[10px]">
                               {successCount > 0 && (
@@ -2420,40 +2551,49 @@ export default function App() {
                         })()}
                       </div>
                       <p className="text-[10px] text-gray-500 font-mono">
-                        智能汇总当前所有路由节点所授权通过的活跃大模型源（共 {
-                          Array.from(new Set(config.keys.flatMap(key => {
-                            const confirmed = key.confirmedModels || [];
-                            return (key.modelFilters && key.modelFilters.length > 0)
-                              ? confirmed.filter(m => key.modelFilters.includes(m))
-                              : confirmed;
-                          }) as string[])).length
-                        } 个独立可用模型）
+                        智能汇总当前所有路由节点授权的大模型源（共 {groupedModels.length} 个独立可用模型，仅在报错或按需时发起检测）
                       </p>
                     </div>
-                    <div className="flex items-center gap-3 w-full sm:w-auto">
+                    <div className="flex items-center gap-2.5 w-full sm:w-auto flex-wrap">
+                      {/* Check Errored Models Only Button */}
+                      {erroredModelsCount > 0 && (
+                        <button
+                          onClick={handleCheckErroredModelsOnly}
+                          disabled={batchCheckingModels}
+                          className="px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold font-sans flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer shrink-0 disabled:opacity-60"
+                          title="仅针对当前出现调用异常或检测失败的模型发起复检"
+                        >
+                          <RefreshCw size={13} className={batchCheckingModels ? "animate-spin" : ""} />
+                          <span>仅复检报错模型 ({erroredModelsCount})</span>
+                        </button>
+                      )}
+
+                      {/* Manual Full Batch Check Button */}
                       <button
                         onClick={handleBatchCheckAllModels}
                         disabled={batchCheckingModels}
-                        className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-sans flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer shrink-0 disabled:opacity-60"
+                        className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-250 rounded-xl text-xs font-bold font-sans flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer shrink-0 disabled:opacity-60"
+                        title="按需对全部模型进行全量检测"
                       >
                         {batchCheckingModels ? (
                           <>
                             <RefreshCw size={13} className="animate-spin" />
                             <span>
-                              可用性检测中 {batchCheckProgress ? `(${batchCheckProgress.current}/${batchCheckProgress.total})` : '...'}
+                              检测中 {batchCheckProgress ? `(${batchCheckProgress.current}/${batchCheckProgress.total})` : '...'}
                             </span>
                           </>
                         ) : (
                           <>
-                            <ShieldCheck size={14} />
-                            <span>全量可用性检测</span>
+                            <ShieldCheck size={14} className="text-slate-600" />
+                            <span>按需全量检测</span>
                           </>
                         )}
                       </button>
-                      <div className="w-full sm:w-72 relative font-sans">
+
+                      <div className="w-full sm:w-64 relative font-sans">
                         <input
                           type="search"
-                          placeholder="关键字模糊检索大模型 (如 qwen, deepseek)..."
+                          placeholder="快速过滤模型 (如 qwen, deepseek)..."
                           value={modelsSearch}
                           onChange={(e) => setModelsSearch(e.target.value)}
                           className="w-full border border-slate-250 focus:border-slate-450 p-2.5 pl-3.5 text-xs font-mono focus:ring-0 focus:outline-none bg-slate-50 rounded-xl font-semibold"
@@ -2462,36 +2602,18 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Model Grouping View */}
-                  {Array.from(new Set(config.keys.flatMap(key => {
-                    const confirmed = key.confirmedModels || [];
-                    if (key.modelFilters && key.modelFilters.length > 0) {
-                      return confirmed.filter(m => key.modelFilters.includes(m));
-                    }
-                    return confirmed;
-                  }) as string[]))
-                    .sort()
-                    .filter((modelId: string) => modelId.toLowerCase().includes(modelsSearch.toLowerCase()))
-                    .map((modelId: string) => {
-                      const keysForModel = config.keys.filter(key => {
-                        const confirmed = key.confirmedModels || [];
-                        const supported = key.modelFilters && key.modelFilters.length > 0
-                          ? confirmed.filter(m => key.modelFilters.includes(m))
-                          : confirmed;
-                        return supported.includes(modelId);
-                      });
-                      if (keysForModel.length === 0) return null;
-                      
-                      // Try to find context length from any key that has it
-                      const sampleKey = keysForModel.find(k => k.modelDetails?.[modelId]?.contextLength);
-                      const ctxLen = sampleKey?.modelDetails?.[modelId]?.contextLength;
-                      const ctx = ctxLen ? (ctxLen >= 1024 * 1024 ? `${(ctxLen / (1024 * 1024)).toFixed(0)}M` : ctxLen >= 1024 ? `${(ctxLen / 1024).toFixed(0)}K` : ctxLen.toString()) : null;
-                      const modelType = detectModelType(modelId);
+                  {/* Model Grouping View - High Performance Memoized Rendering */}
+                  {filteredGroupedModels.length === 0 ? (
+                    <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-500 font-sans text-xs">
+                      未检索到匹配的大模型。您可以调整过滤条件或在端点管理中更新模型列表。
+                    </div>
+                  ) : (
+                    filteredGroupedModels.map(({ modelId, keys: keysForModel, ctx, modelType }) => {
                       const testResult = modelAvailabilityResults[modelId];
                       const isTestingThisModel = testingModel === modelId;
 
                       return (
-                        <div key={modelId} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden font-sans animate-fade-in">
+                        <div key={modelId} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden font-sans">
                           <div className="bg-slate-50 border-b border-slate-150 text-slate-700 p-3.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-[10px] uppercase font-mono tracking-wider">
                             <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
                               <span className="bg-slate-200 text-slate-700 px-2.5 py-0.5 rounded-lg flex items-center gap-2 font-bold font-mono">
@@ -2524,8 +2646,9 @@ export default function App() {
                                   )}
                                 </span>
                               ) : (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-mono border bg-slate-100 text-slate-500 border-slate-200">
-                                  待检测可用性
+                                <span className="px-2 py-0.5 rounded text-[10px] font-mono border bg-slate-100/90 text-slate-600 border-slate-200 flex items-center gap-1 font-semibold">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                                  已就绪
                                 </span>
                               )}
 
@@ -2533,9 +2656,10 @@ export default function App() {
                                 onClick={() => checkModelAvailability(modelId)}
                                 disabled={isTestingThisModel || batchCheckingModels}
                                 className="px-2.5 py-1 bg-slate-200/80 hover:bg-slate-300 text-slate-700 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
+                                title="手动检测此模型可用性"
                               >
                                 {isTestingThisModel ? <RefreshCw size={10} className="animate-spin" /> : <ShieldCheck size={11} />}
-                                <span>{isTestingThisModel ? "可用性检测中..." : "可用性检测"}</span>
+                                <span>{isTestingThisModel ? "检测中..." : "单模型检测"}</span>
                               </button>
                               <button
                                 onClick={() => {
@@ -2553,7 +2677,7 @@ export default function App() {
                           {testResult && !testResult.success && (() => {
                             const advice = getErrorResolutionAdvice(testResult.status, testResult.error);
                             return (
-                              <div className="bg-rose-50/90 border-b border-rose-200 p-4 text-xs font-sans text-rose-800 flex flex-col gap-3 animate-fade-in">
+                              <div className="bg-rose-50/90 border-b border-rose-200 p-4 text-xs font-sans text-rose-800 flex flex-col gap-3">
                                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                                   <div className="flex items-start gap-2.5 min-w-0">
                                     <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
@@ -2699,8 +2823,8 @@ export default function App() {
                               })}
                             </div>
                             
-                            {/* Right Column: Comparative Latency Bar Chart */}
-                            <div className="lg:col-span-5 p-5 bg-slate-50/40 flex flex-col justify-between min-h-[220px]">
+                            {/* Right Column: High-Performance CSS Latency Indicator (Zero DOM bloat) */}
+                            <div className="lg:col-span-5 p-5 bg-slate-50/40 flex flex-col justify-between min-h-[190px]">
                               <div>
                                 <div className="flex items-center justify-between mb-2">
                                   <h4 className="font-sans text-xs font-extrabold text-[#094D2B] flex items-center gap-1.5">
@@ -2708,93 +2832,51 @@ export default function App() {
                                     <span>端点通道与基准延时 (Routing Latency)</span>
                                   </h4>
                                 </div>
-                                <p className="text-[10px] text-slate-500 font-sans mb-4 leading-relaxed">
-                                  该模型在各分流通道上的响应基准。优先路由至延时更低且可用性检测通过的健康节点。
+                                <p className="text-[10px] text-slate-500 font-sans mb-3 leading-relaxed">
+                                  该模型在各分流通道上的响应基准。网关调度时优先命中延时更低且健康的就绪节点。
                                 </p>
                               </div>
 
-                              {(() => {
-                                const chartData = keysForModel.map(key => {
+                              <div className="space-y-2.5 bg-white/80 border border-slate-150 p-3 rounded-xl">
+                                {keysForModel.map(key => {
                                   const perf = getLatencyForProviderModel(key, modelId, globalLogs);
-                                  return {
-                                    name: key.name,
-                                    latency: perf.latency,
-                                    type: perf.type,
-                                    endpoint: key.endpoint || '系统代转端点',
-                                    status: key.status
-                                  };
-                                }).sort((a, b) => a.latency - b.latency);
+                                  const latency = perf.latency;
+                                  const percent = Math.min(100, Math.max(10, (latency / 1000) * 100));
+                                  const isFast = latency < 200;
+                                  const isMedium = latency >= 200 && latency < 500;
+                                  const barColor = isFast ? 'bg-emerald-500' : isMedium ? 'bg-cyan-500' : latency < 800 ? 'bg-amber-500' : 'bg-rose-500';
+                                  const badgeClass = isFast ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : isMedium ? 'bg-cyan-50 text-cyan-700 border-cyan-200' : 'bg-amber-50 text-amber-700 border-amber-200';
 
-                                return (
-                                  <div className="h-44 w-full bg-white/55 border border-slate-150 p-2 rounded-xl">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                      <BarChart
-                                        data={chartData}
-                                        layout="vertical"
-                                        margin={{ top: 5, right: 15, left: 0, bottom: 5 }}
-                                      >
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
-                                        <XAxis 
-                                          type="number" 
-                                          domain={[0, 'dataMax + 100']} 
-                                          stroke="#94a3b8" 
-                                          fontSize={8} 
-                                          tickFormatter={(v) => `${v}ms`}
+                                  return (
+                                    <div key={key.id} className="space-y-1">
+                                      <div className="flex items-center justify-between text-[10px] font-mono">
+                                        <div className="flex items-center gap-1.5 truncate max-w-[180px]">
+                                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${key.status === 'active' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                          <span className="font-bold text-slate-700 truncate">{key.name}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <span className="font-bold text-slate-800">{latency} ms</span>
+                                          <span className={`text-[8px] px-1.5 py-0.2 rounded border font-bold ${badgeClass}`}>
+                                            {isFast ? '极速' : isMedium ? '良好' : '较慢'}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                                        <div 
+                                          className={`h-full ${barColor} rounded-full transition-all duration-300`} 
+                                          style={{ width: `${percent}%` }}
                                         />
-                                        <YAxis 
-                                          type="category" 
-                                          dataKey="name" 
-                                          stroke="#475569" 
-                                          fontSize={8} 
-                                          width={75}
-                                          tickLine={false}
-                                          axisLine={false}
-                                        />
-                                        <Tooltip 
-                                          content={({ active, payload }) => {
-                                            if (active && payload && payload.length) {
-                                              const data = payload[0].payload;
-                                              return (
-                                                <div className="bg-white border-2 border-slate-200 p-2 rounded-lg shadow-sm font-sans text-[10px] space-y-1">
-                                                  <p className="font-bold text-slate-800">{data.name}</p>
-                                                  <p className="text-[8px] text-slate-400 font-mono truncate max-w-[170px]">{data.endpoint}</p>
-                                                  <div className="flex items-center gap-2 mt-0.5 py-0.5 px-1 bg-slate-50 rounded">
-                                                    <span className="font-bold text-[#094D2B] font-mono">{data.latency} ms</span>
-                                                    <span className="text-[7px] bg-slate-200 text-slate-700 px-1 rounded uppercase font-bold tracking-wider">
-                                                      基准延时
-                                                    </span>
-                                                  </div>
-                                                </div>
-                                              );
-                                            }
-                                            return null;
-                                          }}
-                                        />
-                                        <Bar dataKey="latency" radius={[0, 4, 4, 0]} barSize={9}>
-                                          {chartData.map((entry, index) => {
-                                            let color = '#d97706'; 
-                                            if (entry.latency < 200) {
-                                              color = '#059669'; // Emerald-500
-                                            } else if (entry.latency < 400) {
-                                              color = '#06b6d4'; // Cyan-500
-                                            } else if (entry.latency < 600) {
-                                              color = '#f59e0b'; // Amber-500
-                                            } else {
-                                              color = '#f43f5e'; // Rose-500
-                                            }
-                                            return <Cell key={`cell-${index}`} fill={color} />;
-                                          })}
-                                        </Bar>
-                                      </BarChart>
-                                    </ResponsiveContainer>
-                                  </div>
-                                );
-                              })()}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
                           </div>
                         </div>
                       );
-                    })}
+                    })
+                  )}
                 </motion.div>
               ) : viewMode === 'logs' ? (
                 <motion.div key="logs" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
